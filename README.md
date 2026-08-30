@@ -1,14 +1,12 @@
 # pi-usage
 
-Show OpenAI Codex subscription quota in Pi's normal footer.
-
-The extension displays the remaining percentage for the available five-hour and weekly windows, for example:
+Show remaining OpenAI Codex quota in Pi's footer:
 
 ```text
 5h 82% · wk 64%
 ```
 
-It is visible only while the active provider is `openai-codex`. Usage is fetched from the authenticated Codex account endpoint on startup, after a completed turn, and periodically (once per minute by default). The last successful value remains visible if a refresh fails.
+The status appears for the active `openai-codex` provider. Usage refreshes on startup, after completed turns, and once per minute by default. A temporary refresh failure leaves the last successful value visible.
 
 ## Install
 
@@ -16,19 +14,18 @@ It is visible only while the active provider is `openai-codex`. Usage is fetched
 pi install git:github.com/nijaru/pi-usage
 ```
 
-Restart Pi after installing. The extension uses Pi's existing OpenAI Codex OAuth session; it does not ask for or store another token and does not modify Codex requests.
+Restart Pi after installing. The extension uses Pi's existing Codex OAuth session and does not modify Codex requests.
 
-## Commands
+## Usage
 
-- `/usage` — force a refresh and report the current value.
+Run `/usage` to force a refresh and report the current value.
 
 ## Configuration
 
-Optional global config: `~/.pi/agent/extensions/pi-usage.json`
+Project config overrides global config:
 
-Optional project config: `.pi/extensions/pi-usage.json`
-
-Project values override global values:
+- project: `.pi/extensions/pi-usage.json`
+- global: `~/.pi/agent/extensions/pi-usage.json`
 
 ```json
 {
@@ -39,7 +36,7 @@ Project values override global values:
 }
 ```
 
-The endpoint is an undocumented ChatGPT/Codex backend API and may change. Custom endpoints must use HTTPS. Pi-usage falls back to the older `/codex/usage` route when the current route returns 404 or 405. A failed refresh is soft: it never interrupts an agent turn.
+The usage endpoint is an undocumented ChatGPT/Codex API and may change. Custom endpoints must use HTTPS; a 404 or 405 also tries the older `/codex/usage` route. Refresh failures never interrupt an agent turn. The existing OAuth access token and account ID are sent only to the configured endpoint, never logged or persisted.
 
 ## Development
 
@@ -47,10 +44,6 @@ The endpoint is an undocumented ChatGPT/Codex backend API and may change. Custom
 bun install
 bun run check
 ```
-
-## Security
-
-Pi extensions run with the permissions of the local user. This extension sends the existing Codex OAuth access token and account ID only to the configured usage endpoint, never logs them, and does not persist quota data.
 
 ## License
 

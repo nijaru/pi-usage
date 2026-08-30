@@ -2,7 +2,7 @@
   "name": "pi-usage",
   "version": "0.1.0",
   "type": "module",
-  "description": "Show OpenAI Codex subscription quota in the pi footer.",
+  "description": "Show OpenAI Codex subscription quota in Pi's footer.",
   "keywords": [
     "pi-package",
     "pi",
