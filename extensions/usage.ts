@@ -201,11 +201,32 @@ export function remainingPercent(window: UsageWindow): number {
 	return Math.max(0, Math.min(100, Math.round(100 - window.usedPercent)));
 }
 
+function formatResetCountdown(resetAt: number | undefined, now: number): string | undefined {
+	if (resetAt === undefined || !Number.isFinite(resetAt)) return undefined;
+	const totalMinutes = Math.ceil(Math.max(0, resetAt - now) / 60_000);
+	if (totalMinutes === 0) return "now";
+
+	const days = Math.floor(totalMinutes / (24 * 60));
+	const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+	const minutes = totalMinutes % 60;
+	if (days > 0) return `${days}d${hours > 0 ? `${hours}h` : ""}`;
+	if (hours > 0) return `${hours}h${minutes > 0 ? `${minutes}m` : ""}`;
+	return `${minutes}m`;
+}
+
+function formatWindowStatus(label: string, window: UsageWindow, now: number): string {
+	const reset = formatResetCountdown(window.resetAt, now);
+	return `${label} ${remainingPercent(window)}%${reset ? ` ↻${reset}` : ""}`;
+}
+
 /** Format the compact value intended for Pi's normal footer/status bar. */
-export function formatUsageStatus(usage: Pick<CodexUsage, "fiveHour" | "weekly">): string {
+export function formatUsageStatus(
+	usage: Pick<CodexUsage, "fiveHour" | "weekly">,
+	now = Date.now(),
+): string {
 	const parts: string[] = [];
-	if (usage.fiveHour) parts.push(`5h ${remainingPercent(usage.fiveHour)}%`);
-	if (usage.weekly) parts.push(`wk ${remainingPercent(usage.weekly)}%`);
+	if (usage.fiveHour) parts.push(formatWindowStatus("5h", usage.fiveHour, now));
+	if (usage.weekly) parts.push(formatWindowStatus("wk", usage.weekly, now));
 	return parts.join(" · ");
 }
 

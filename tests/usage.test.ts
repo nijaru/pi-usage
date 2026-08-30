@@ -43,7 +43,7 @@ describe("parseCodexUsage", () => {
 
 		expect(usage.fiveHour?.usedPercent).toBe(18);
 		expect(usage.weekly?.usedPercent).toBe(36);
-		expect(formatUsageStatus(usage)).toBe("5h 82% · wk 64%");
+		expect(formatUsageStatus(usage, 1_735_683_600_000)).toBe("5h 82% ↻1h42m · wk 64% ↻3d15h");
 	});
 
 	test("uses window duration instead of assuming primary is five-hour", () => {
@@ -65,7 +65,7 @@ describe("parseCodexUsage", () => {
 			},
 		});
 
-		expect(formatUsageStatus(usage)).toBe("5h 91% · wk 73%");
+		expect(formatUsageStatus(usage, Date.parse("2030-01-01T00:00:00Z"))).toBe("5h 91% · wk 73% ↻1d3h");
 		expect(usage.weekly?.resetAt).toBe(Date.parse("2030-01-02T03:04:05Z"));
 	});
 
@@ -88,6 +88,19 @@ describe("parseCodexUsage", () => {
 	test("rejects responses without usable rate-limit windows", () => {
 		expect(() => parseCodexUsage({})).toThrow("no rate-limit data");
 		expect(() => parseCodexUsage(usageResponse(null, null))).toThrow("no usable windows");
+	});
+
+	test("formats reset countdowns next to each window", () => {
+		const now = Date.parse("2030-01-01T00:00:00Z");
+		expect(
+			formatUsageStatus(
+				{
+					fiveHour: { usedPercent: 18, resetAt: now + (1 * 60 + 42) * 60_000 },
+					weekly: { usedPercent: 36, resetAt: now + (3 * 24 + 6) * 60 * 60_000 },
+				},
+				now,
+			),
+		).toBe("5h 82% ↻1h42m · wk 64% ↻3d6h");
 	});
 
 	test("clamps remaining percentages to the display range", () => {

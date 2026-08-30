@@ -3,10 +3,10 @@
 Show remaining OpenAI Codex quota in Pi's footer:
 
 ```text
-5h 82% · wk 64%
+5h 82% ↻1h42m · wk 64% ↻3d6h
 ```
 
-The status appears for the active `openai-codex` provider. Usage refreshes on startup, after completed turns, and once per minute by default. A temporary refresh failure leaves the last successful value visible.
+The status appears for the active `openai-codex` provider. Usage refreshes on startup, after completed turns, and once per minute by default. When reset times are available, `↻` shows the time until each window resets. A temporary refresh failure leaves the last successful value visible.
 
 ## Install
 
