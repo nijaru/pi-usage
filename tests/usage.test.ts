@@ -32,6 +32,10 @@ function tokenWithAccount(accountId: string): string {
 	})}.signature`;
 }
 
+function tempRoot(prefix: string): string {
+	return mkdtempSync(join(tmpdir(), prefix));
+}
+
 describe("parseCodexUsage", () => {
 	test("parses current five-hour and weekly windows", () => {
 		const usage = parseCodexUsage(
@@ -57,18 +61,6 @@ describe("parseCodexUsage", () => {
 		expect(formatUsageStatus(usage)).toBe("5h 90% · wk 75%");
 	});
 
-	test("supports camel-case and percent-left aliases", () => {
-		const usage = parseCodexUsage({
-			rate_limits: {
-				primary: { percent_left: 91, windowDurationMins: 300 },
-				secondary: { percentLeft: 73, windowDurationMins: 10_080, resetsAt: "2030-01-02T03:04:05Z" },
-			},
-		});
-
-		expect(formatUsageStatus(usage, Date.parse("2030-01-01T00:00:00Z"))).toBe("5h 91% · wk 73% ↻1d3h");
-		expect(usage.weekly?.resetAt).toBe(Date.parse("2030-01-02T03:04:05Z"));
-	});
-
 	test("accepts one available window", () => {
 		const usage = parseCodexUsage(usageResponse(null, { used_percent: 50, limit_window_seconds: 604_800 }));
 		expect(usage.fiveHour).toBeUndefined();
@@ -83,6 +75,24 @@ describe("parseCodexUsage", () => {
 			),
 		);
 		expect(formatUsageStatus(usage)).toBe("5h 90%");
+	});
+
+	test("skips windows without usable percentages", () => {
+		const usage = parseCodexUsage(
+			usageResponse(
+				{ used_percent: 10, limit_window_seconds: 18_000 },
+				{ limit_window_seconds: 604_800, reset_at: 1_736_000_000 },
+			),
+		);
+		expect(usage.weekly).toBeUndefined();
+		expect(formatUsageStatus(usage)).toBe("5h 90%");
+	});
+
+	test("without durations, primary maps to the five-hour window", () => {
+		const usage = parseCodexUsage(
+			usageResponse({ used_percent: 20 }, { used_percent: 40 }),
+		);
+		expect(formatUsageStatus(usage)).toBe("5h 80% · wk 60%");
 	});
 
 	test("rejects responses without usable rate-limit windows", () => {
@@ -106,6 +116,19 @@ describe("parseCodexUsage", () => {
 	test("clamps remaining percentages to the display range", () => {
 		expect(formatUsageStatus({ fiveHour: { usedPercent: -10 } })).toBe("5h 100%");
 		expect(formatUsageStatus({ weekly: { usedPercent: 110 } })).toBe("wk 0%");
+	});
+
+	test("parses the live endpoint shape observed on 2026-09-06", () => {
+		// reset_at values are unix seconds; countdowns derive from reset_at minus
+		// the display time, not from reset_after_seconds.
+		const usage = parseCodexUsage(
+			usageResponse(
+				{ used_percent: 0, limit_window_seconds: 18_000, reset_after_seconds: 18_000, reset_at: 1_788_713_597 },
+				{ used_percent: 100, limit_window_seconds: 604_800, reset_after_seconds: 52_258, reset_at: 1_788_747_854 },
+			),
+		);
+
+		expect(formatUsageStatus(usage, 1_788_668_800_000)).toBe("5h 100% ↻12h27m · wk 0% ↻21h58m");
 	});
 });
 
@@ -145,25 +168,6 @@ describe("fetchCodexUsage", () => {
 		expect(usage.fiveHour?.usedPercent).toBe(12);
 	});
 
-	test("falls back to the older route only for a missing current route", async () => {
-		const urls: string[] = [];
-		const usage = await fetchCodexUsage({
-			accessToken: token,
-			accountId,
-			fetcher: async (url) => {
-				urls.push(String(url));
-				if (urls.length === 1) return new Response("missing", { status: 404 });
-				return new Response(JSON.stringify(response), { status: 200 });
-			},
-		});
-
-		expect(urls).toEqual([
-			DEFAULT_USAGE_URL,
-			"https://chatgpt.com/backend-api/codex/usage",
-		]);
-		expect(usage.fiveHour?.usedPercent).toBe(12);
-	});
-
 	test("rejects insecure configured endpoints before sending credentials", async () => {
 		await expect(
 			fetchCodexUsage({
@@ -200,7 +204,7 @@ describe("fetchCodexUsage", () => {
 
 describe("configuration", () => {
 	test("merges project config over global config", () => {
-		const root = mkdtempSync(join(tmpdir(), "pi-usage-"));
+		const root = tempRoot("pi-usage-");
 		const home = join(root, "home");
 		try {
 			const paths = configPaths(root, home);
@@ -221,7 +225,7 @@ describe("configuration", () => {
 	});
 
 	test("clamps unsafe timer values", () => {
-		const root = mkdtempSync(join(tmpdir(), "pi-usage-"));
+		const root = tempRoot("pi-usage-");
 		try {
 			const path = join(root, ".pi", "extensions", CONFIG_BASENAME);
 			mkdirSync(join(root, ".pi", "extensions"), { recursive: true });
@@ -234,7 +238,7 @@ describe("configuration", () => {
 	});
 
 	test("ignores malformed config", () => {
-		const root = mkdtempSync(join(tmpdir(), "pi-usage-"));
+		const root = tempRoot("pi-usage-");
 		try {
 			const path = join(root, CONFIG_BASENAME);
 			writeFileSync(path, "not json");

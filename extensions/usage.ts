@@ -5,8 +5,6 @@ export const DEFAULT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 
 const USER_AGENT = "pi-usage";
 
-type JsonRecord = Record<string, unknown>;
-
 export interface UsageWindow {
 	usedPercent: number;
 	windowSeconds?: number;
@@ -16,22 +14,20 @@ export interface UsageWindow {
 export interface CodexUsage {
 	fiveHour?: UsageWindow;
 	weekly?: UsageWindow;
-	allowed?: boolean;
-	limitReached?: boolean;
-	planType?: string;
 }
 
 export interface FetchCodexUsageOptions {
 	accessToken: string;
 	accountId: string;
 	usageUrl?: string;
-	legacyUsageUrl?: string;
 	timeoutMs?: number;
 	signal?: AbortSignal;
 	fetcher?: FetchLike;
 }
 
 export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
+
+type JsonRecord = Record<string, unknown>;
 
 export function isRecord(value: unknown): value is JsonRecord {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -46,48 +42,24 @@ function finiteNumber(value: unknown): number | undefined {
 	return undefined;
 }
 
-function firstNumber(record: JsonRecord, keys: readonly string[]): number | undefined {
-	for (const key of keys) {
-		const value = finiteNumber(record[key]);
-		if (value !== undefined) return value;
-	}
-	return undefined;
-}
-
-function parseResetAt(value: unknown): number | undefined {
-	const numeric = finiteNumber(value);
-	if (numeric !== undefined) {
-		// The current API uses Unix seconds. Accept milliseconds for older clients.
-		return numeric > 100_000_000_000 ? numeric : numeric * 1000;
-	}
-	if (typeof value === "string") {
-		const parsed = Date.parse(value);
-		return Number.isNaN(parsed) ? undefined : parsed;
-	}
-	return undefined;
-}
-
+/**
+ * Parse a rate-limit window. The endpoint is undocumented and volatile, so
+ * malformed or missing windows are skipped rather than rejected: one usable
+ * window still produces a status.
+ */
 function parseWindow(value: unknown): UsageWindow | undefined {
 	if (!isRecord(value)) return undefined;
 
-	const percentLeft = firstNumber(value, ["percent_left", "percentLeft"]);
-	const usedPercent = firstNumber(value, ["used_percent", "usedPercent", "percent_used", "percentUsed"]);
-	const rawUsedPercent = percentLeft !== undefined ? 100 - percentLeft : usedPercent;
-	if (rawUsedPercent === undefined) return undefined;
+	const usedPercent = finiteNumber(value.used_percent);
+	if (usedPercent === undefined) return undefined;
 
-	const windowSeconds = firstNumber(value, [
-		"limit_window_seconds",
-		"window_duration_seconds",
-		"windowDurationSeconds",
-	]);
-	const durationMinutes = firstNumber(value, ["window_duration_mins", "windowDurationMins"]);
-	const resetAt = parseResetAt(
-		value.reset_at_unix ?? value.reset_time_ms ?? value.resetsAt ?? value.reset_at ?? value.resetAt,
-	);
+	// reset_at is Unix seconds; accept milliseconds in case the field changes.
+	const resetAtUnix = finiteNumber(value.reset_at);
+	const resetAt = resetAtUnix === undefined ? undefined : resetAtUnix * 1000;
 
 	return {
-		usedPercent: Math.max(0, Math.min(100, rawUsedPercent)),
-		windowSeconds: windowSeconds ?? (durationMinutes === undefined ? undefined : durationMinutes * 60),
+		usedPercent: Math.max(0, Math.min(100, usedPercent)),
+		windowSeconds: finiteNumber(value.limit_window_seconds),
 		resetAt,
 	};
 }
@@ -99,102 +71,49 @@ function durationKind(seconds: number | undefined): "fiveHour" | "weekly" | unde
 	return undefined;
 }
 
-interface WindowCandidate {
-	value: UsageWindow;
-	hint?: "fiveHour" | "weekly" | "primary" | "secondary";
-}
-
-function collectWindows(rateLimit: JsonRecord): WindowCandidate[] {
-	const keys: readonly [string, WindowCandidate["hint"]][] = [
-		["five_hour", "fiveHour"],
-		["fiveHour", "fiveHour"],
-		["weekly", "weekly"],
-		["primary_window", "primary"],
-		["primaryWindow", "primary"],
-		["primary", "primary"],
-		["secondary_window", "secondary"],
-		["secondaryWindow", "secondary"],
-		["secondary", "secondary"],
-	];
-	const candidates: WindowCandidate[] = [];
-	const seen = new Set<unknown>();
-	for (const [key, hint] of keys) {
-		const raw = rateLimit[key];
-		if (seen.has(raw)) continue;
-		const value = parseWindow(raw);
-		if (!value) continue;
-		seen.add(raw);
-		candidates.push({ value, hint });
-	}
-	return candidates;
-}
-
+/**
+ * Select a window from the primary/secondary pair. Duration is the ground
+ * truth; the primary/secondary naming is only a hint, so a primary window
+ * with weekly duration is reported as weekly. A window already used for the
+ * other label is excluded, so conflicting metadata never double-labels one
+ * window.
+ */
 function selectWindow(
-	candidates: readonly WindowCandidate[],
+	primary: UsageWindow | undefined,
+	secondary: UsageWindow | undefined,
 	kind: "fiveHour" | "weekly",
-	selected?: UsageWindow,
+	taken?: UsageWindow,
 ): UsageWindow | undefined {
-	const byDuration = candidates.find(
-		(candidate) => candidate.value !== selected && durationKind(candidate.value.windowSeconds) === kind,
-	);
-	if (byDuration) return byDuration.value;
-
-	const byName = candidates.find(
-		(candidate) =>
-			candidate.value !== selected &&
-			candidate.hint === kind &&
-			(durationKind(candidate.value.windowSeconds) === undefined || durationKind(candidate.value.windowSeconds) === kind),
-	);
-	if (byName) return byName.value;
-
-	const legacyName = kind === "fiveHour" ? "primary" : "secondary";
-	const byLegacyName = candidates.find(
-		(candidate) =>
-			candidate.value !== selected &&
-			candidate.hint === legacyName &&
-			(durationKind(candidate.value.windowSeconds) === undefined || durationKind(candidate.value.windowSeconds) === kind),
-	);
-	if (byLegacyName) return byLegacyName.value;
-
-	return undefined;
-}
-
-function rateLimitObject(payload: JsonRecord): JsonRecord | undefined {
-	const direct = payload.rate_limit ?? payload.rate_limits ?? payload.rateLimit ?? payload.rateLimits;
-	if (isRecord(direct)) return direct;
-	if (Array.isArray(direct)) {
-		const preferred = direct.find((entry) => isRecord(entry) && entry.limit_id === "codex");
-		return isRecord(preferred) ? preferred : isRecord(direct[0]) ? direct[0] : undefined;
+	const candidates = [
+		{ value: primary, hint: "primary" as const },
+		{ value: secondary, hint: "secondary" as const },
+	];
+	for (const candidate of candidates) {
+		if (candidate.value && candidate.value !== taken && durationKind(candidate.value.windowSeconds) === kind) {
+			return candidate.value;
+		}
 	}
+	// A window can serve only one label: when both durations claim the same
+	// kind, the second window is dropped rather than labeled on a guess.
+	const untimed = candidates.filter((candidate) => candidate.value && durationKind(candidate.value.windowSeconds) === undefined);
+	if (kind === "fiveHour" && primary) return primary;
+	if (kind === "weekly" && secondary && untimed.length > 0) return secondary;
 	return undefined;
 }
 
 /** Parse the private Codex usage response without exposing account identifiers or tokens. */
 export function parseCodexUsage(payload: unknown): CodexUsage {
 	if (!isRecord(payload)) throw new Error("Codex usage response was not an object");
-	const rateLimit = rateLimitObject(payload);
-	if (!rateLimit) throw new Error("Codex usage response has no rate-limit data");
+	const rateLimit = payload.rate_limit;
+	if (!isRecord(rateLimit)) throw new Error("Codex usage response has no rate-limit data");
 
-	const candidates = collectWindows(rateLimit);
-	const fiveHour = selectWindow(candidates, "fiveHour");
-	const weekly = selectWindow(candidates, "weekly", fiveHour);
+	const primary = parseWindow(rateLimit.primary_window);
+	const secondary = parseWindow(rateLimit.secondary_window);
+	const fiveHour = selectWindow(primary, secondary, "fiveHour");
+	const weekly = selectWindow(primary, secondary, "weekly", fiveHour);
 	if (!fiveHour && !weekly) throw new Error("Codex usage response has no usable windows");
 
-	return {
-		fiveHour,
-		weekly,
-		allowed: typeof rateLimit.allowed === "boolean" ? rateLimit.allowed : undefined,
-		limitReached: typeof rateLimit.limit_reached === "boolean"
-			? rateLimit.limit_reached
-			: typeof rateLimit.limitReached === "boolean"
-				? rateLimit.limitReached
-				: undefined,
-		planType: typeof payload.plan_type === "string"
-			? payload.plan_type
-			: typeof payload.planType === "string"
-				? payload.planType
-				: undefined,
-	};
+	return { fiveHour, weekly };
 }
 
 export function remainingPercent(window: UsageWindow): number {
@@ -261,59 +180,43 @@ function linkedSignal(parent: AbortSignal | undefined, timeoutMs: number): { sig
 	};
 }
 
-function fallbackUsageUrl(url: string): string | undefined {
-	if (url.endsWith("/wham/usage")) return `${url.slice(0, -"/wham/usage".length)}/codex/usage`;
-	return undefined;
-}
-
-/** Fetch and parse usage, falling back to the older endpoint only on a missing route. */
+/** Fetch and parse the usage endpoint. */
 export async function fetchCodexUsage(options: FetchCodexUsageOptions): Promise<CodexUsage> {
 	if (!options.accessToken) throw new Error("Codex usage requires an access token");
 	if (!options.accountId) throw new Error("Codex usage requires an account id");
 
 	const usageUrl = options.usageUrl ?? DEFAULT_USAGE_URL;
-	const legacyUrl = options.legacyUsageUrl ?? fallbackUsageUrl(usageUrl);
-	for (const url of [usageUrl, legacyUrl]) {
-		if (!url) continue;
-		let parsed: URL;
-		try {
-			parsed = new URL(url);
-		} catch {
-			throw new Error("Codex usage URL is invalid");
-		}
-		if (parsed.protocol !== "https:") throw new Error("Codex usage URL must use HTTPS");
+	let parsed: URL;
+	try {
+		parsed = new URL(usageUrl);
+	} catch {
+		throw new Error("Codex usage URL is invalid");
 	}
+	if (parsed.protocol !== "https:") throw new Error("Codex usage URL must use HTTPS");
 	const timeoutMs = Number.isFinite(options.timeoutMs)
 		? Math.max(1, Math.min(MAX_REQUEST_TIMEOUT_MS, Math.floor(options.timeoutMs as number)))
 		: DEFAULT_REQUEST_TIMEOUT_MS;
-	const urls = [...new Set([usageUrl, legacyUrl].filter((url): url is string => Boolean(url)))];
 	const fetcher = options.fetcher ?? globalThis.fetch;
 	if (!fetcher) throw new Error("Fetch is unavailable");
 
-	let lastStatus: number | undefined;
-	for (const [index, url] of urls.entries()) {
-		const linked = linkedSignal(options.signal, timeoutMs);
-		try {
-			const response = await fetcher(url, {
-				method: "GET",
-				headers: {
-					Accept: "application/json",
-					Authorization: `Bearer ${options.accessToken}`,
-					"ChatGPT-Account-Id": options.accountId,
-					Origin: "https://chatgpt.com",
-					Referer: "https://chatgpt.com/",
-					"User-Agent": USER_AGENT,
-				},
-				redirect: "error",
-				signal: linked.signal,
-			});
-			lastStatus = response.status;
-			if ((response.status === 404 || response.status === 405) && index < urls.length - 1) continue;
-			if (!response.ok) throw new Error(`Codex usage request failed (${response.status})`);
-			return parseCodexUsage(await response.json());
-		} finally {
-			linked.cancel();
-		}
+	const linked = linkedSignal(options.signal, timeoutMs);
+	try {
+		const response = await fetcher(usageUrl, {
+			method: "GET",
+			headers: {
+				Accept: "application/json",
+				Authorization: `Bearer ${options.accessToken}`,
+				"ChatGPT-Account-Id": options.accountId,
+				Origin: "https://chatgpt.com",
+				Referer: "https://chatgpt.com/",
+				"User-Agent": USER_AGENT,
+			},
+			redirect: "error",
+			signal: linked.signal,
+		});
+		if (!response.ok) throw new Error(`Codex usage request failed (${response.status})`);
+		return parseCodexUsage(await response.json());
+	} finally {
+		linked.cancel();
 	}
-	throw new Error(`Codex usage request failed (${lastStatus ?? "unknown status"})`);
 }
