@@ -118,6 +118,34 @@ describe("parseCodexUsage", () => {
 		expect(formatUsageStatus({ weekly: { usedPercent: 110 } })).toBe("wk 0%");
 	});
 
+	test("hides the five-hour window while the weekly quota is exhausted", () => {
+		const now = Date.parse("2030-01-01T00:00:00Z");
+		// The five-hour bucket has room, but the weekly block gates requests;
+		// its value is not actionable until the weekly window resets.
+		expect(
+			formatUsageStatus(
+				{
+					fiveHour: { usedPercent: 0, resetAt: now + 4 * 60 * 60_000 },
+					weekly: { usedPercent: 100, resetAt: now + 14 * 60 * 60_000 },
+				},
+				now,
+			),
+		).toBe("wk 0% ↻14h");
+	});
+
+	test("shows the five-hour window whenever the weekly quota has room", () => {
+		const now = Date.parse("2030-01-01T00:00:00Z");
+		expect(
+			formatUsageStatus(
+				{
+					fiveHour: { usedPercent: 0, resetAt: now + 4 * 60 * 60_000 },
+					weekly: { usedPercent: 99.4, resetAt: now + 6 * 24 * 60 * 60_000 },
+				},
+				now,
+			),
+		).toBe("5h 100% ↻4h · wk 1% ↻6d");
+	});
+
 	test("parses the live endpoint shape observed on 2026-09-06", () => {
 		// reset_at values are unix seconds; countdowns derive from reset_at minus
 		// the display time, not from reset_after_seconds.
@@ -128,7 +156,7 @@ describe("parseCodexUsage", () => {
 			),
 		);
 
-		expect(formatUsageStatus(usage, 1_788_668_800_000)).toBe("5h 100% ↻12h27m · wk 0% ↻21h58m");
+		expect(formatUsageStatus(usage, 1_788_668_800_000)).toBe("wk 0% ↻21h58m");
 	});
 });
 

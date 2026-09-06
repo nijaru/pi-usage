@@ -144,7 +144,11 @@ export function formatUsageStatus(
 	now = Date.now(),
 ): string {
 	const parts: string[] = [];
-	if (usage.fiveHour) parts.push(formatWindowStatus("5h", usage.fiveHour, now));
+	// A weekly-exhausted quota blocks requests regardless of the five-hour
+	// bucket's contents, so its remaining percent is not actionable and is
+	// hidden rather than shown next to a blocking 0%.
+	const weeklyBlocked = usage.weekly !== undefined && remainingPercent(usage.weekly) === 0;
+	if (usage.fiveHour && !weeklyBlocked) parts.push(formatWindowStatus("5h", usage.fiveHour, now));
 	if (usage.weekly) parts.push(formatWindowStatus("wk", usage.weekly, now));
 	return parts.join(" · ");
 }
