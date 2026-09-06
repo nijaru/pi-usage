@@ -36,7 +36,7 @@ Project config overrides global config:
 }
 ```
 
-The usage endpoint is an undocumented ChatGPT/Codex API and may change. Custom endpoints must use HTTPS; a 404 or 405 also tries the older `/codex/usage` route. Refresh failures never interrupt an agent turn. The existing OAuth access token and account ID are sent only to the configured endpoint, never logged or persisted.
+The usage endpoint is an undocumented ChatGPT/Codex API and may change. Custom endpoints must use HTTPS. Refresh failures never interrupt an agent turn. The existing OAuth access token and account ID are sent only to the configured endpoint, never logged or persisted.
 
 ## Development
 
