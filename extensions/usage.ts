@@ -14,6 +14,7 @@ export interface UsageWindow {
 export interface CodexUsage {
 	fiveHour?: UsageWindow;
 	weekly?: UsageWindow;
+	otherWindows?: UsageWindow[];
 }
 
 export interface FetchCodexUsageOptions {
@@ -53,52 +54,56 @@ function parseWindow(value: unknown): UsageWindow | undefined {
 	const usedPercent = finiteNumber(value.used_percent);
 	if (usedPercent === undefined) return undefined;
 
-	// reset_at is Unix seconds; accept milliseconds in case the field changes.
-	const resetAtUnix = finiteNumber(value.reset_at);
-	const resetAt = resetAtUnix === undefined ? undefined : resetAtUnix * 1000;
+	const rawWindowSeconds = finiteNumber(value.limit_window_seconds);
+	const windowSeconds = rawWindowSeconds !== undefined && rawWindowSeconds > 0 ? rawWindowSeconds : undefined;
+	// reset_at is currently Unix seconds. Treat values already in the normal
+	// millisecond epoch range as milliseconds if the endpoint changes units.
+	const rawResetAt = finiteNumber(value.reset_at);
+	const resetAt = rawResetAt === undefined ? undefined : Math.abs(rawResetAt) >= 100_000_000_000 ? rawResetAt : rawResetAt * 1000;
 
 	return {
 		usedPercent: Math.max(0, Math.min(100, usedPercent)),
-		windowSeconds: finiteNumber(value.limit_window_seconds),
+		windowSeconds,
 		resetAt,
 	};
 }
 
 function durationKind(seconds: number | undefined): "fiveHour" | "weekly" | undefined {
-	if (seconds === undefined) return undefined;
-	if (seconds >= 4 * 60 * 60 && seconds <= 6 * 60 * 60) return "fiveHour";
-	if (seconds >= 6 * 24 * 60 * 60 && seconds <= 8 * 24 * 60 * 60) return "weekly";
+	if (seconds === 5 * 60 * 60) return "fiveHour";
+	if (seconds === 7 * 24 * 60 * 60) return "weekly";
 	return undefined;
 }
 
 /**
- * Select a window from the primary/secondary pair. Duration is the ground
- * truth; the primary/secondary naming is only a hint, so a primary window
- * with weekly duration is reported as weekly. A window already used for the
- * other label is excluded, so conflicting metadata never double-labels one
- * window.
+ * Classify each backend slot from its duration, never from primary/secondary
+ * position. The endpoint has moved a weekly-only quota into primary_window,
+ * and other account types may expose different durations. Unknown durations
+ * remain available for an honest generic/duration label instead of becoming
+ * a made-up five-hour quota.
  */
-function selectWindow(
-	primary: UsageWindow | undefined,
-	secondary: UsageWindow | undefined,
-	kind: "fiveHour" | "weekly",
-	taken?: UsageWindow,
-): UsageWindow | undefined {
-	const candidates = [
-		{ value: primary, hint: "primary" as const },
-		{ value: secondary, hint: "secondary" as const },
-	];
-	for (const candidate of candidates) {
-		if (candidate.value && candidate.value !== taken && durationKind(candidate.value.windowSeconds) === kind) {
-			return candidate.value;
+function classifyWindows(primary: UsageWindow | undefined, secondary: UsageWindow | undefined): CodexUsage {
+	const usage: CodexUsage = {};
+	const otherWindows: UsageWindow[] = [];
+	const seenOtherDurations = new Set<number | "unknown">();
+
+	for (const window of [primary, secondary]) {
+		if (!window) continue;
+		const kind = durationKind(window.windowSeconds);
+		if (kind) {
+			// Conflicting metadata can present the same duration in both slots.
+			// One user-facing label must correspond to at most one window.
+			if (!usage[kind]) usage[kind] = window;
+			continue;
 		}
+
+		const durationKey = window.windowSeconds ?? "unknown";
+		if (seenOtherDurations.has(durationKey)) continue;
+		seenOtherDurations.add(durationKey);
+		otherWindows.push(window);
 	}
-	// A window can serve only one label: when both durations claim the same
-	// kind, the second window is dropped rather than labeled on a guess.
-	const untimed = candidates.filter((candidate) => candidate.value && durationKind(candidate.value.windowSeconds) === undefined);
-	if (kind === "fiveHour" && primary) return primary;
-	if (kind === "weekly" && secondary && untimed.length > 0) return secondary;
-	return undefined;
+
+	if (otherWindows.length > 0) usage.otherWindows = otherWindows;
+	return usage;
 }
 
 /** Parse the private Codex usage response without exposing account identifiers or tokens. */
@@ -107,13 +112,11 @@ export function parseCodexUsage(payload: unknown): CodexUsage {
 	const rateLimit = payload.rate_limit;
 	if (!isRecord(rateLimit)) throw new Error("Codex usage response has no rate-limit data");
 
-	const primary = parseWindow(rateLimit.primary_window);
-	const secondary = parseWindow(rateLimit.secondary_window);
-	const fiveHour = selectWindow(primary, secondary, "fiveHour");
-	const weekly = selectWindow(primary, secondary, "weekly", fiveHour);
-	if (!fiveHour && !weekly) throw new Error("Codex usage response has no usable windows");
-
-	return { fiveHour, weekly };
+	const usage = classifyWindows(parseWindow(rateLimit.primary_window), parseWindow(rateLimit.secondary_window));
+	if (!usage.fiveHour && !usage.weekly && !usage.otherWindows?.length) {
+		throw new Error("Codex usage response has no usable windows");
+	}
+	return usage;
 }
 
 export function remainingPercent(window: UsageWindow): number {
@@ -138,19 +141,34 @@ function formatWindowStatus(label: string, window: UsageWindow, now: number): st
 	return `${label} ${remainingPercent(window)}%${reset ? ` ↻${reset}` : ""}`;
 }
 
+function genericWindowLabel(windowSeconds: number | undefined): string {
+	if (windowSeconds === undefined || !Number.isInteger(windowSeconds) || windowSeconds <= 0) return "quota";
+	const day = 24 * 60 * 60;
+	if (windowSeconds % day === 0) return `${windowSeconds / day}d`;
+	if (windowSeconds % 3600 === 0) return `${windowSeconds / 3600}h`;
+	if (windowSeconds % 60 === 0) return `${windowSeconds / 60}m`;
+	return "quota";
+}
+
 /** Format the compact value intended for Pi's normal footer/status bar. */
 export function formatUsageStatus(
-	usage: Pick<CodexUsage, "fiveHour" | "weekly">,
+	usage: Pick<CodexUsage, "fiveHour" | "weekly" | "otherWindows">,
 	now = Date.now(),
 ): string {
-	const parts: string[] = [];
-	// A weekly-exhausted quota blocks requests regardless of the five-hour
-	// bucket's contents, so its remaining percent is not actionable and is
-	// hidden rather than shown next to a blocking 0%.
 	const weeklyBlocked = usage.weekly !== undefined && remainingPercent(usage.weekly) === 0;
-	if (usage.fiveHour && !weeklyBlocked) parts.push(formatWindowStatus("5h", usage.fiveHour, now));
-	if (usage.weekly) parts.push(formatWindowStatus("wk", usage.weekly, now));
-	return parts.join(" · ");
+	const windows: Array<{ label: string; window: UsageWindow }> = [];
+	// A weekly-exhausted quota blocks requests regardless of shorter buckets,
+	// so their remaining percentages are not actionable until weekly resets.
+	if (usage.fiveHour && !weeklyBlocked) windows.push({ label: "5h", window: usage.fiveHour });
+	if (!weeklyBlocked) {
+		for (const window of usage.otherWindows ?? []) {
+			windows.push({ label: genericWindowLabel(window.windowSeconds), window });
+		}
+	}
+	if (usage.weekly) windows.push({ label: "wk", window: usage.weekly });
+
+	windows.sort((left, right) => (left.window.windowSeconds ?? Number.POSITIVE_INFINITY) - (right.window.windowSeconds ?? Number.POSITIVE_INFINITY));
+	return windows.map(({ label, window }) => formatWindowStatus(label, window, now)).join(" · ");
 }
 
 /** Extract the account id from the current Pi/OpenAI Codex OAuth access token. */
