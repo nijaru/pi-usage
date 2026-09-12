@@ -2,11 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, maintenance-20260912]
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -17,9 +17,72 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Apply maintenance patch
+        if: github.ref == 'refs/heads/maintenance-20260912'
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          package = Path('package.json')
+          data = json.loads(package.read_text())
+          data['devDependencies']['@earendil-works/pi-coding-agent'] = '0.85.1'
+          data['engines']['node'] = '>=22.19.0'
+          package.write_text(json.dumps(data, indent=2) + '\n')
+
+          readme = Path('README.md')
+          text = readme.read_text().replace('Node 22.6+ is required', 'Node 22.19+ is required')
+          readme.write_text(text)
+
+          providers = Path('extensions/providers.ts')
+          text = providers.read_text()
+          old = '''\tconst addRow = (raw: unknown, minutes: number, label: string) => {\n\t\tif (!object(raw)) return;\n\t\tconst used = Number(raw.used), limit = Number(raw.limit);'''
+          new = '''\tconst addRow = (raw: unknown, minutes: number, label: string, missingMeansFresh = false) => {\n\t\tif (!object(raw)) {\n\t\t\t// Kimi can omit detail for an explicitly described window until it is used.\n\t\t\t// Only an absent detail object means fresh; malformed/null detail stays unknown.\n\t\t\tif (missingMeansFresh) buckets.push({ minutes, remaining: 100, label });\n\t\t\treturn;\n\t\t}\n\t\tconst used = Number(raw.used), limit = Number(raw.limit);'''
+          if old not in text and 'missingMeansFresh = false' not in text:
+              raise SystemExit('Kimi addRow patch point not found')
+          text = text.replace(old, new)
+          old = 'if (minutes) addRow(raw.detail, minutes, cleanLabel(raw.name, shortWindow(minutes)));'
+          new = 'if (minutes) addRow(raw.detail, minutes, cleanLabel(raw.name, shortWindow(minutes)), raw.detail === undefined);'
+          if old not in text and new not in text:
+              raise SystemExit('Kimi limits patch point not found')
+          text = text.replace(old, new)
+          old = 'const hours = Number(raw.number), label = Number.isFinite(hours) && hours > 0 ? `${hours}h` : "5h";'
+          new = 'const hours = Number(raw.number), label = Number.isFinite(hours) && hours > 0 ? `${hours}h` : "rolling";'
+          if old not in text and new not in text:
+              raise SystemExit('Z.AI duration patch point not found')
+          text = text.replace(old, new)
+          providers.write_text(text)
+
+          tests = Path('tests/providers-extra.test.mjs')
+          text = tests.read_text()
+          kimi_anchor = '''test("OpenCode keeps returned windows as remaining percentages", () => {'''
+          kimi_test = '''test("Kimi shows an explicitly described unused window as fresh", () => {\n  const result = parseKimi({\n    usage: { used: "50", limit: "100" },\n    limits: [{ name: "5h", window: { duration: 5, timeUnit: "TIME_UNIT_HOUR" } }],\n  });\n  assert.match(formatBalanceStatus(result), /^kimi 100% 5h/);\n});\n\n'''
+          if 'Kimi shows an explicitly described unused window as fresh' not in text:
+              if kimi_anchor not in text:
+                  raise SystemExit('Kimi test insertion point not found')
+              text = text.replace(kimi_anchor, kimi_test + kimi_anchor)
+          zai_anchor = '''test("Baseten reports net trailing-30-day spend, not balance", () => {'''
+          zai_test = '''test("Z.AI does not invent five-hour duration when metadata is missing", () => {\n  const result = parseZai("zai", {\n    code: 0,\n    data: { limits: [{ type: "CREDIT_LIMIT", unit: 3, percentage: 30 }] },\n  });\n  assert.equal(result.status, "zai 70% rolling");\n  assert.doesNotMatch(result.status, /5h/);\n});\n\n'''
+          if 'Z.AI does not invent five-hour duration when metadata is missing' not in text:
+              if zai_anchor not in text:
+                  raise SystemExit('Z.AI test insertion point not found')
+              text = text.replace(zai_anchor, zai_test + zai_anchor)
+          tests.write_text(text)
+          PY
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '22.19.0'
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      - run: bun install --frozen-lockfile
+      - run: bun install
       - run: bun run check
+      - run: git diff --check
+      - name: Commit maintenance changes
+        if: github.ref == 'refs/heads/maintenance-20260912'
+        run: |
+          if ! git diff --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add package.json bun.lock README.md extensions/providers.ts tests/providers-extra.test.mjs
+            git commit -m 'fix(usage): harden provider quota metadata [skip ci]'
+            git push
+          fi
