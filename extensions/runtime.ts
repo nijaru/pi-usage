@@ -13,6 +13,8 @@ interface Cached { identity: string; fetchedAt: number; report: Report; stale?: 
 interface Credential { identity: string; token: string; accountId?: string; creditsKey?: string; }
 const supported = (provider: string) => provider === "openai-codex" || isBalanceProvider(provider);
 const status = (report: Report) => "codex" in report ? formatUsageStatus(report.codex) : formatBalanceStatus(report.balance);
+/** Footer values carry a leading separator; notifications and reports use `status` directly. */
+const display = (text: string) => text ? `· ${text}` : undefined;
 
 /** One owner for refreshes, cancellation, identity checks, and the existing footer slot. */
 export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionContext) => ResolvedUsageConfig): void {
@@ -119,7 +121,7 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 			lastAttempt.set(key, Date.now());
 			if (lastAttempt.size > 32) lastAttempt.delete(lastAttempt.keys().next().value!);
 			const value = await query(ctx, model);
-			if (owner === generation && ctx.model?.provider === model.provider && ctx.model?.id === model.id) ctx.ui.setStatus(STATUS_KEY, `${status(value.report)}${value.stale ? " · stale" : ""}`);
+			if (owner === generation && ctx.model?.provider === model.provider && ctx.model?.id === model.id) ctx.ui.setStatus(STATUS_KEY, display(`${status(value.report)}${value.stale ? " · stale" : ""}`));
 		} catch (error) {
 			if (owner !== generation) return;
 			const cancelled = error instanceof Error && error.name === "AbortError";
@@ -128,7 +130,7 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 			let same = false;
 			try { same = value?.identity === (await credential(ctx, model, readConfig(ctx))).identity; } catch { /* Unavailable auth clears old values. */ }
 			if (owner !== generation) return;
-			ctx.ui.setStatus(STATUS_KEY, value && same ? `${status(value.report)}${value.stale || !cancelled ? " · stale" : ""}` : cancelled ? undefined : `${model.provider} usage unavailable`);
+			ctx.ui.setStatus(STATUS_KEY, value && same ? display(`${status(value.report)}${value.stale || !cancelled ? " · stale" : ""}`) : cancelled ? undefined : display(`${model.provider} usage unavailable`));
 		}
 	}
 	function start(ctx: ExtensionContext): void {
@@ -165,7 +167,7 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 					try {
 						const value = await query(ctx, model, true);
 						results[index] = "codex" in value.report ? `Codex usage: ${status(value.report)}` : formatBalanceReport(value.report.balance);
-						if (ctx.model?.provider === model.provider && ctx.model?.id === model.id && owner === generation) ctx.ui.setStatus(STATUS_KEY, status(value.report));
+						if (ctx.model?.provider === model.provider && ctx.model?.id === model.id && owner === generation) ctx.ui.setStatus(STATUS_KEY, display(status(value.report)));
 					} catch (error) {
 						results[index] = `${provider}: ${error instanceof Error ? error.message : "usage unavailable"}`;
 					}

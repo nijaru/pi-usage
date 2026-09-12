@@ -33,13 +33,13 @@ test('active DeepSeek balance appears without changing inference requests',async
   assert.deepEqual([...f.commands.keys()],['usage']);
   assert.equal(f.hooks.has('before_provider_request'),false);
   await f.hooks.get('session_start')({},f.ctx);await tick();
-  assert.equal(f.statuses.at(-1),'deepseek USD 12.00'); assert.equal(calls,1);
+  assert.equal(f.statuses.at(-1),'· deepseek USD 12.00'); assert.equal(calls,1);
   await f.hooks.get('agent_settled')({},f.ctx);assert.equal(calls,1);
 });
 test('successful Codex display remains byte-for-byte unchanged',async t=>{
   const f=fixture(t,[codex]);globalThis.fetch=async()=>Response.json({rate_limit:{primary_window:{used_percent:18,limit_window_seconds:18000},secondary_window:{used_percent:36,limit_window_seconds:604800}}});
   await f.commands.get('usage').handler('',f.ctx);
-  assert.equal(f.statuses.at(-1),'5h 82% · wk 64%');assert.equal(f.notifications.at(-1),'Codex usage: 5h 82% · wk 64%');
+  assert.equal(f.statuses.at(-1),'· 5h 82% · wk 64%');assert.equal(f.notifications.at(-1),'Codex usage: 5h 82% · wk 64%');
 });
 test('account swap cannot publish an old in-flight balance',async t=>{
   const f=fixture(t);let release;globalThis.fetch=()=>new Promise(resolve=>{release=resolve;});
@@ -67,7 +67,7 @@ test('/usage all is explicit and limits concurrent provider queries to two',asyn
   globalThis.fetch=async url=>{active++;peak=Math.max(peak,active);await tick();active--;return String(url).includes('deepseek')?balance():String(url).includes('openrouter')?Response.json({data:{limit:null,usage:3}}):Response.json({balance:'4.00'});};
   await f.commands.get('usage').handler('all',f.ctx);
   assert.equal(peak,2);assert.match(f.notifications.at(-1),/deepseek USD 12/);assert.match(f.notifications.at(-1),/vercel-ai-gateway USD 4/);
-  assert.equal(f.statuses.at(-1),'deepseek USD 12.00');
+  assert.equal(f.statuses.at(-1),'· deepseek USD 12.00');
 });
 test('a configured proxy cannot send its credential to an official billing endpoint',async t=>{
   const f=fixture(t,[{...deepseek,baseUrl:'https://proxy.example'}]);let calls=0;globalThis.fetch=async()=>{calls++;return balance();};
