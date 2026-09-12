@@ -5,7 +5,7 @@
     "": {
       "name": "pi-usage",
       "devDependencies": {
-        "@earendil-works/pi-coding-agent": "latest",
+        "@earendil-works/pi-coding-agent": "0.85.1",
         "@types/bun": "latest",
         "oxlint": "latest",
         "typescript": "^6.0.3",

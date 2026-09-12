@@ -28,6 +28,14 @@ test("Kimi reports request windows and booster separately", () => {
   assert.equal(result.amounts[0].value, "2.5");
 });
 
+test("Kimi shows an explicitly described unused window as fresh", () => {
+  const result = parseKimi({
+    usage: { used: "50", limit: "100" },
+    limits: [{ name: "5h", window: { duration: 5, timeUnit: "TIME_UNIT_HOUR" } }],
+  });
+  assert.match(formatBalanceStatus(result), /^kimi 100% 5h/);
+});
+
 test("OpenCode keeps returned windows as remaining percentages", () => {
   const result = parseOpenCode({ usage: { rolling: { status: "ok", percent: 10 }, weekly: { status: "rate-limited", percent: 100 } } });
   assert.match(result.status, /90% rolling/);
@@ -48,6 +56,15 @@ test("Z.AI reports 5h, weekly, and monthly MCP quota without mixing units", () =
   });
   assert.equal(result.status, "zai 70% 5h · 80% wk");
   assert.match(result.lines.join("\n"), /MCP monthly: 8\/10 left/);
+});
+
+test("Z.AI does not invent five-hour duration when metadata is missing", () => {
+  const result = parseZai("zai", {
+    code: 0,
+    data: { limits: [{ type: "CREDIT_LIMIT", unit: 3, percentage: 30 }] },
+  });
+  assert.equal(result.status, "zai 70% rolling");
+  assert.doesNotMatch(result.status, /5h/);
 });
 
 test("Baseten reports net trailing-30-day spend, not balance", () => {

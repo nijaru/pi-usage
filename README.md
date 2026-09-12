@@ -110,7 +110,7 @@ bun run check
 node --experimental-strip-types --test tests/*.test.mjs
 ```
 
-Node 22.6+ is required for native TypeScript stripping in the offline fixtures. `bun run check` also loads the production entrypoint, checks configuration/Codex regressions, lints, and typechecks against the real Pi dependency. Offline mocked lifecycle tests do not prove live provider compatibility; verify authenticated reports separately without printing credentials.
+Node 22.19+ is required for native TypeScript stripping in the offline fixtures. `bun run check` also loads the production entrypoint, checks configuration/Codex regressions, lints, and typechecks against the real Pi dependency. Offline mocked lifecycle tests do not prove live provider compatibility; verify authenticated reports separately without printing credentials.
 
 The provider expansion was cross-checked against first-party API contracts where available and the current `narumiruna/pi-extensions` usage adapters at tree `1c1ac2c0f371b38957719dc197afb54bc13bda43` (MIT). That package's `/fast` behavior, request mutations, reset redemption, and formatter were not imported.
 

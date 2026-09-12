@@ -27,7 +27,7 @@
     ]
   },
   "engines": {
-    "node": ">=22.6"
+    "node": ">=22.19.0"
   },
   "scripts": {
     "test": "bun test tests/*.test.ts && bun run test:offline",
@@ -37,7 +37,7 @@
     "check": "bun run test && oxlint extensions/ tests/ && tsc --noEmit"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "latest",
+    "@earendil-works/pi-coding-agent": "0.85.1",
     "@types/bun": "latest",
     "oxlint": "latest",
     "typescript": "^6.0.3"
