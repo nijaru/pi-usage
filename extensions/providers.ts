@@ -284,8 +284,13 @@ export function parseKimi(payload: unknown): ProviderReport {
 	const root = requireObject(payload);
 	const result = report("kimi-coding", "quota");
 	const buckets: Array<{ minutes: number; remaining: number; reset?: string; label: string }> = [];
-	const addRow = (raw: unknown, minutes: number, label: string) => {
-		if (!object(raw)) return;
+	const addRow = (raw: unknown, minutes: number, label: string, missingMeansFresh = false) => {
+		if (!object(raw)) {
+			// Kimi can omit detail for an explicitly described window until it is used.
+			// Only an absent detail object means fresh; malformed/null detail stays unknown.
+			if (missingMeansFresh) buckets.push({ minutes, remaining: 100, label });
+			return;
+		}
 		const used = Number(raw.used), limit = Number(raw.limit);
 		if (!Number.isSafeInteger(used) || used < 0 || !Number.isSafeInteger(limit) || limit <= 0) return;
 		const remaining = Math.max(0, 100 - (used / limit) * 100);
@@ -296,7 +301,7 @@ export function parseKimi(payload: unknown): ProviderReport {
 		for (const raw of root.limits) {
 			if (!object(raw)) continue;
 			const minutes = windowMinutes(raw.window);
-			if (minutes) addRow(raw.detail, minutes, cleanLabel(raw.name, shortWindow(minutes)));
+			if (minutes) addRow(raw.detail, minutes, cleanLabel(raw.name, shortWindow(minutes)), raw.detail === undefined);
 		}
 	}
 	const byWindow = new Map<number, typeof buckets[number]>();
@@ -360,7 +365,7 @@ export function parseZai(provider: string, payload: unknown): ProviderReport {
 		if (type !== "TOKENS_LIMIT" && type !== "CREDIT_LIMIT") continue;
 		if (unit === 3) {
 			const used = percent(raw.percentage); if (used === undefined) continue;
-			const hours = Number(raw.number), label = Number.isFinite(hours) && hours > 0 ? `${hours}h` : "5h";
+			const hours = Number(raw.number), label = Number.isFinite(hours) && hours > 0 ? `${hours}h` : "rolling";
 			const left = Math.max(0, 100-used); parts.push(`${left.toFixed(0)}% ${label}`); result.lines.push(`${label}: ${left.toFixed(0)}% left${resetText(raw.nextResetTime) ? ` · resets ${resetText(raw.nextResetTime)}` : ""}`);
 		} else if (unit === 6) {
 			const usedCount = Number(raw.currentValue), limitCount = Number(raw.usage);
