@@ -284,13 +284,8 @@ export function parseKimi(payload: unknown): ProviderReport {
 	const root = requireObject(payload);
 	const result = report("kimi-coding", "quota");
 	const buckets: Array<{ minutes: number; remaining: number; reset?: string; label: string }> = [];
-	const addRow = (raw: unknown, minutes: number, label: string, missingMeansFresh = false) => {
-		if (!object(raw)) {
-			// Kimi can omit detail for an explicitly described window until it is used.
-			// Only an absent detail object means fresh; malformed/null detail stays unknown.
-			if (missingMeansFresh) buckets.push({ minutes, remaining: 100, label });
-			return;
-		}
+	const addRow = (raw: unknown, minutes: number, label: string) => {
+		if (!object(raw)) return;
 		const used = Number(raw.used), limit = Number(raw.limit);
 		if (!Number.isSafeInteger(used) || used < 0 || !Number.isSafeInteger(limit) || limit <= 0) return;
 		const remaining = Math.max(0, 100 - (used / limit) * 100);
@@ -301,7 +296,7 @@ export function parseKimi(payload: unknown): ProviderReport {
 		for (const raw of root.limits) {
 			if (!object(raw)) continue;
 			const minutes = windowMinutes(raw.window);
-			if (minutes) addRow(raw.detail, minutes, cleanLabel(raw.name, shortWindow(minutes)), raw.detail === undefined);
+			if (minutes) addRow(raw.detail, minutes, cleanLabel(raw.name, shortWindow(minutes)));
 		}
 	}
 	const byWindow = new Map<number, typeof buckets[number]>();
