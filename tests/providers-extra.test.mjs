@@ -28,12 +28,13 @@ test("Kimi reports request windows and booster separately", () => {
   assert.equal(result.amounts[0].value, "2.5");
 });
 
-test("Kimi shows an explicitly described unused window as fresh", () => {
+test("Kimi does not invent usage for a window whose detail is missing", () => {
   const result = parseKimi({
     usage: { used: "50", limit: "100" },
     limits: [{ name: "5h", window: { duration: 5, timeUnit: "TIME_UNIT_HOUR" } }],
   });
-  assert.match(formatBalanceStatus(result), /^kimi 100% 5h/);
+  assert.equal(formatBalanceStatus(result), "kimi 50% wk");
+  assert.doesNotMatch(formatBalanceStatus(result), /5h/);
 });
 
 test("OpenCode keeps returned windows as remaining percentages", () => {
