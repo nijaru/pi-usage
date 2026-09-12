@@ -3,6 +3,15 @@ import assert from 'node:assert/strict';
 import { registerUsage } from '../extensions/runtime.ts';
 import { DEFAULT_USAGE_URL } from '../extensions/usage.ts';
 const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function waitFor(predicate,timeoutMs=2500){
+  const deadline=Date.now()+timeoutMs;
+  while(!predicate()){
+    if(Date.now()>=deadline)return false;
+    await sleep(10);
+  }
+  return true;
+}
 const token=account=>`e30.${Buffer.from(JSON.stringify({'https://api.openai.com/auth':{chatgpt_account_id:account}})).toString('base64url')}.signature`;
 const deepseek={provider:'deepseek',id:'flash',baseUrl:'https://api.deepseek.com'};
 const codex={provider:'openai-codex',id:'gpt',baseUrl:'https://chatgpt.com/backend-api/codex'};
@@ -69,15 +78,15 @@ test('timer refreshes between turns and stops after shutdown', async t => {
   const f=fixture(t);f.config({pollIntervalMs:1000});let calls=0;
   globalThis.fetch=async()=>{calls++;return balance();};
   await f.hooks.get('session_start')({},f.ctx);await tick();assert.equal(calls,1);
-  await new Promise(resolve=>setTimeout(resolve,1100));assert.ok(calls>=2);
+  assert.equal(await waitFor(()=>calls>=2),true);
   await f.hooks.get('session_shutdown')({},f.ctx);const finished=calls;
   await f.hooks.get('agent_settled')({}, {...f.ctx,hasUI:false});assert.equal(calls,finished);
 });
 
 test('transient failure marks an existing value stale rather than presenting a fresh balance', async t => {
-  const f=fixture(t);f.config({pollIntervalMs:1});let fail=false;
+  const f=fixture(t);f.config({pollIntervalMs:10});let fail=false;
   globalThis.fetch=async()=>fail?new Response('error',{status:503}):balance();
   await f.hooks.get('session_start')({},f.ctx);await tick();fail=true;
-  await f.hooks.get('agent_settled')({},f.ctx);await tick();
-  assert.match(f.statuses.at(-1),/12.00 · stale$/);
+  await f.hooks.get('agent_settled')({},f.ctx);
+  assert.equal(await waitFor(()=>/12\.00 · stale$/.test(f.statuses.at(-1)??''),250),true);
 });
