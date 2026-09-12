@@ -61,20 +61,37 @@ describe("parseCodexUsage", () => {
 		expect(formatUsageStatus(usage)).toBe("5h 90% · wk 75%");
 	});
 
+	test("supports a weekly-only quota in primary_window", () => {
+		const usage = parseCodexUsage(
+			usageResponse({ used_percent: 1, limit_window_seconds: 604_800, reset_at: 1_788_747_854 }, null),
+		);
+		expect(usage.fiveHour).toBeUndefined();
+		expect(usage.weekly?.usedPercent).toBe(1);
+		expect(formatUsageStatus(usage, 1_788_668_800_000)).toBe("wk 99% ↻21h58m");
+	});
+
 	test("accepts one available window", () => {
 		const usage = parseCodexUsage(usageResponse(null, { used_percent: 50, limit_window_seconds: 604_800 }));
 		expect(usage.fiveHour).toBeUndefined();
 		expect(formatUsageStatus(usage)).toBe("wk 50%");
 	});
 
-	test("does not use one window for both labels when metadata conflicts", () => {
-		const usage = parseCodexUsage(
+	test("does not duplicate a known duration across labels", () => {
+		const fiveHour = parseCodexUsage(
 			usageResponse(
 				{ used_percent: 10, limit_window_seconds: 18_000 },
-				{ used_percent: 10, limit_window_seconds: 18_000 },
+				{ used_percent: 20, limit_window_seconds: 18_000 },
 			),
 		);
-		expect(formatUsageStatus(usage)).toBe("5h 90%");
+		expect(formatUsageStatus(fiveHour)).toBe("5h 90%");
+
+		const weekly = parseCodexUsage(
+			usageResponse(
+				{ used_percent: 10, limit_window_seconds: 604_800 },
+				{ used_percent: 20, limit_window_seconds: 604_800 },
+			),
+		);
+		expect(formatUsageStatus(weekly)).toBe("wk 90%");
 	});
 
 	test("skips windows without usable percentages", () => {
@@ -88,11 +105,22 @@ describe("parseCodexUsage", () => {
 		expect(formatUsageStatus(usage)).toBe("5h 90%");
 	});
 
-	test("without durations, primary maps to the five-hour window", () => {
+	test("does not infer a five-hour window when duration metadata is missing", () => {
+		const usage = parseCodexUsage(usageResponse({ used_percent: 20 }, null));
+		expect(usage.fiveHour).toBeUndefined();
+		expect(usage.weekly).toBeUndefined();
+		expect(formatUsageStatus(usage)).toBe("quota 80%");
+	});
+
+	test("renders changed duration metadata without relabeling it as five-hour", () => {
 		const usage = parseCodexUsage(
-			usageResponse({ used_percent: 20 }, { used_percent: 40 }),
+			usageResponse(
+				{ used_percent: 20, limit_window_seconds: 3_600 },
+				{ used_percent: 40, limit_window_seconds: 604_800 },
+			),
 		);
-		expect(formatUsageStatus(usage)).toBe("5h 80% · wk 60%");
+		expect(usage.fiveHour).toBeUndefined();
+		expect(formatUsageStatus(usage)).toBe("1h 80% · wk 60%");
 	});
 
 	test("rejects responses without usable rate-limit windows", () => {
@@ -111,6 +139,14 @@ describe("parseCodexUsage", () => {
 				now,
 			),
 		).toBe("5h 82% ↻1h42m · wk 64% ↻3d6h");
+	});
+
+	test("accepts reset_at in milliseconds without multiplying it again", () => {
+		const resetAt = Date.parse("2030-01-01T01:00:00Z");
+		const usage = parseCodexUsage(
+			usageResponse({ used_percent: 20, limit_window_seconds: 3_600, reset_at: resetAt }, null),
+		);
+		expect(usage.otherWindows?.[0]?.resetAt).toBe(resetAt);
 	});
 
 	test("clamps remaining percentages to the display range", () => {

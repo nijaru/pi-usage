@@ -1,10 +1,12 @@
 # pi-usage
 
-Show the active provider's quota, balance, allowance, or spend in Pi without opening its billing website. Codex keeps the existing compact footer unchanged:
+Show the active provider's quota, balance, allowance, or spend in Pi without opening its billing website. Codex keeps the existing compact footer for accounts that expose five-hour and weekly windows:
 
 ```text
 5h 82% ↻1h42m · wk 64% ↻3d6h
 ```
+
+Window labels come from the reported duration, not from `primary_window` / `secondary_window` position. A weekly-only account renders only `wk`; other reported durations use their duration (for example `1h`), and a window whose duration is unavailable falls back to the generic `quota` label rather than being guessed as five-hour.
 
 ## Install and use
 
@@ -27,7 +29,7 @@ Only the active provider is polled automatically. Other-provider reports are exp
 
 | Pi provider | Report | Verification |
 | --- | --- | --- |
-| `openai-codex` | Remaining five-hour/weekly quota and reset countdowns; existing formatting is preserved. | Existing implementation/tests. |
+| `openai-codex` | Remaining quota windows and reset countdowns; known five-hour/weekly labels are duration-derived and weekly-only plans are supported. | Existing implementation/tests plus sanitized upstream response-shape checks. |
 | `deepseek` | Exact available USD/CNY balances, with granted/top-up breakdowns. | Fixture-verified. |
 | `openrouter` | Per-key cap and spend; account credit when a management credential is explicitly bound below. | Fixture-verified. |
 | `moonshotai`, `moonshotai-cn` | Regional available, cash, and voucher balances. | Fixture-verified. |
