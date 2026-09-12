@@ -11,7 +11,7 @@ Window labels come from the reported duration, not from `primary_window` / `seco
 ## Install and use
 
 ```sh
-pi install git:github.com/nijaru/pi-usage
+pi install npm:@nijaru/pi-usage
 ```
 
 Reload Pi when no child jobs are running. Existing installations can use Pi's targeted package update command.

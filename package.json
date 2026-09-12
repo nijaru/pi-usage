@@ -1,6 +1,6 @@
 {
-  "name": "pi-usage",
-  "version": "0.1.0",
+  "name": "@nijaru/pi-usage",
+  "version": "0.0.1",
   "type": "module",
   "description": "Compact provider quota and balance reporting for Pi.",
   "keywords": [
@@ -16,6 +16,9 @@
     "openrouter"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "author": "Nick Naru <nick@nijaru.com>",
   "repository": {
     "type": "git",
