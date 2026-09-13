@@ -33,7 +33,7 @@ test('active DeepSeek balance appears without changing inference requests',async
   assert.deepEqual([...f.commands.keys()],['usage']);
   assert.equal(f.hooks.has('before_provider_request'),false);
   await f.hooks.get('session_start')({},f.ctx);await tick();
-  assert.equal(f.statuses.at(-1),'· deepseek USD 12.00'); assert.equal(calls,1);
+  assert.equal(f.statuses.at(-1),'· deepseek $12.00'); assert.equal(calls,1);
   await f.hooks.get('agent_settled')({},f.ctx);assert.equal(calls,1);
 });
 test('successful Codex display remains byte-for-byte unchanged',async t=>{
@@ -54,7 +54,7 @@ test('model switch and shutdown reject stale request completion',async t=>{
 test('errors do not become a zero balance or leak server response bodies',async t=>{
   const f=fixture(t);globalThis.fetch=async()=>new Response('SECRET-RESPONSE',{status:403});
   await f.commands.get('usage').handler('',f.ctx);
-  assert.match(f.notifications.at(-1),/403/);assert.doesNotMatch(f.notifications.at(-1),/SECRET|USD 0/);
+  assert.match(f.notifications.at(-1),/403/);assert.doesNotMatch(f.notifications.at(-1),/SECRET|\$0/);
 });
 test('disabled/headless sessions do not poll',async t=>{
   const f=fixture(t);let calls=0;globalThis.fetch=async()=>{calls++;return balance();};
@@ -66,8 +66,8 @@ test('/usage all is explicit and limits concurrent provider queries to two',asyn
   const f=fixture(t,models);let active=0,peak=0;
   globalThis.fetch=async url=>{active++;peak=Math.max(peak,active);await tick();active--;return String(url).includes('deepseek')?balance():String(url).includes('openrouter')?Response.json({data:{limit:null,usage:3}}):Response.json({balance:'4.00'});};
   await f.commands.get('usage').handler('all',f.ctx);
-  assert.equal(peak,2);assert.match(f.notifications.at(-1),/deepseek USD 12/);assert.match(f.notifications.at(-1),/vercel-ai-gateway USD 4/);
-  assert.equal(f.statuses.at(-1),'· deepseek USD 12.00');
+  assert.equal(peak,2);assert.match(f.notifications.at(-1),/deepseek \$12/);assert.match(f.notifications.at(-1),/vercel-ai-gateway \$4/);
+  assert.equal(f.statuses.at(-1),'· deepseek $12.00');
 });
 test('a configured proxy cannot send its credential to an official billing endpoint',async t=>{
   const f=fixture(t,[{...deepseek,baseUrl:'https://proxy.example'}]);let calls=0;globalThis.fetch=async()=>{calls++;return balance();};

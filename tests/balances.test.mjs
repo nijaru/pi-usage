@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decimal, subtract, parseDeepSeek, parseOpenRouter, addOpenRouterCredits, parseMoonshot, parseMiniMax, parseVercel, officialIdentity, fetchBalance, formatBalanceStatus, resolveCreditsKey, getJson } from '../extensions/providers.ts';
+import { decimal, subtract, parseDeepSeek, parseOpenRouter, addOpenRouterCredits, parseMoonshot, parseMiniMax, parseVercel, officialIdentity, fetchBalance, formatBalanceStatus, formatBalanceReport, resolveCreditsKey, getJson } from '../extensions/providers.ts';
 
 const model = (provider, baseUrl) => ({ provider, baseUrl, id: 'test' });
 const data = { is_available: true, balance_infos: [{ currency: 'USD', total_balance: '4.123456789123', granted_balance: '0.00', topped_up_balance: '4.123456789123' }] };
@@ -15,7 +15,9 @@ test('decimal money preserves strings and performs exact subtraction', () => {
 });
 test('DeepSeek keeps currencies and exact decimals separate', () => {
   const result = parseDeepSeek({ ...data, balance_infos: [...data.balance_infos, { currency: 'CNY', total_balance: '10.001' }] });
-  assert.equal(formatBalanceStatus(result), 'deepseek USD 4.123456789123 · CNY 10.001');
+  assert.equal(formatBalanceStatus(result), 'deepseek $4.12 · CN¥10.00');
+  assert.match(formatBalanceReport(result), /balance: \$4\.123456789123/);
+  assert.match(formatBalanceReport(result), /balance: CN¥10\.001/);
   assert.match(formatBalanceStatus(parseDeepSeek({ ...data, is_available: false })), /API unavailable/);
 });
 for (const invalid of [{}, { ...data, balance_infos: [] }, { ...data, balance_infos: [{ currency: 'EUR', total_balance: '3' }] }, { ...data, balance_infos: [...data.balance_infos, ...data.balance_infos] }]) {
@@ -27,7 +29,7 @@ test('OpenRouter key cap is not an account balance', () => {
   assert.equal(unlimited.amounts.length, 0);
   assert.match(formatBalanceStatus(unlimited), /key spend only/);
   const limited = parseOpenRouter({ data: { limit: 50, limit_remaining: 30, usage: 20 } });
-  assert.match(formatBalanceStatus(limited), /30 key cap left/);
+  assert.match(formatBalanceStatus(limited), /\$30\.00 key cap left/);
   const credited = addOpenRouterCredits(limited, { data: { total_credits: 100.5, total_usage: 25.75 } });
   assert.equal(credited.amounts[0].value, '74.75');
   assert.equal(credited.amounts[1].value, '30');

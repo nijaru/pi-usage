@@ -1,5 +1,6 @@
 /** Read-only provider balances, quota, and rated spend. Endpoint contracts are documented in README.md. */
 import { createHash } from "node:crypto";
+import { formatMoney } from "./money.ts";
 
 export interface ProviderModel { provider: string; id: string; baseUrl: string; }
 export interface ResolvedAuth {
@@ -174,7 +175,7 @@ export function parseDeepSeek(payload: unknown): ProviderReport {
 		add(result, "balance", row.currency, row.total_balance);
 		for (const [label, field] of [["granted", "granted_balance"], ["topped up", "topped_up_balance"]]) {
 			const value = decimal(row[field]);
-			if (value !== undefined) result.lines.push(`${row.currency} ${label}: ${value}`);
+			if (value !== undefined) result.lines.push(`${label}: ${formatMoney(row.currency, value)}`);
 		}
 	}
 	if (!result.amounts.length) throw new Error("DeepSeek returned no balances");
@@ -187,12 +188,12 @@ export function parseOpenRouter(payload: unknown): ProviderReport {
 	const result = report("openrouter", "key-limit");
 	if (data.limit === null) result.lines.push("No per-key cap; account balance is separate");
 	else if (decimal(data.limit) !== undefined) {
-		result.lines.push(`USD key cap: ${decimal(data.limit)}`);
+		result.lines.push(`key cap: ${formatMoney("USD", decimal(data.limit)!)}`);
 		if (decimal(data.limit_remaining) !== undefined) add(result, "key cap left", "USD", data.limit_remaining);
 	} else result.lines.push("Per-key cap unavailable");
 	for (const [label, field] of [["spent", "usage"], ["today", "usage_daily"], ["this week", "usage_weekly"], ["this month", "usage_monthly"]]) {
 		const value = decimal(data[field]);
-		if (value !== undefined) result.lines.push(`USD ${label}: ${value}`);
+		if (value !== undefined) result.lines.push(`${label}: ${formatMoney("USD", value)}`);
 	}
 	if (!result.amounts.length && !["usage", "usage_daily", "usage_weekly", "usage_monthly"].some(key => decimal(data[key]) !== undefined) && data.limit !== null) throw new Error("OpenRouter returned no usage data");
 	return result;
@@ -214,7 +215,7 @@ export function parseMoonshot(provider: string, payload: unknown): ProviderRepor
 	add(result, "balance", currency, data.available_balance);
 	for (const [label, field] of [["cash", "cash_balance"], ["voucher", "voucher_balance"]]) {
 		const value = decimal(data[field]);
-		if (value !== undefined) result.lines.push(`${currency} ${label}: ${value}`);
+		if (value !== undefined) result.lines.push(`${label}: ${formatMoney(currency, value)}`);
 	}
 	return result;
 }
@@ -223,7 +224,7 @@ export function parseVercel(payload: unknown): ProviderReport {
 	const data = requireObject(payload);
 	const result = report("vercel-ai-gateway");
 	add(result, "credit", "USD", data.balance);
-	if (decimal(data.total_used) !== undefined) result.lines.push(`USD total used: ${decimal(data.total_used)}`);
+	if (decimal(data.total_used) !== undefined) result.lines.push(`total used: ${formatMoney("USD", decimal(data.total_used)!)}`);
 	return result;
 }
 
@@ -237,7 +238,7 @@ export function parseMiniMax(provider: string, payload: unknown, balance: boolea
 		add(result, "balance", currency, data.available_amount);
 		for (const key of ["cash_balance", "voucher_balance", "credit_balance", "owed_amount"]) {
 			const value = decimal(data[key]);
-			if (value !== undefined) result.lines.push(`${currency} ${key}: ${value}`);
+			if (value !== undefined) result.lines.push(`${key}: ${formatMoney(currency, value)}`);
 		}
 		return result;
 	}
@@ -315,7 +316,7 @@ export function parseKimi(payload: unknown): ProviderReport {
 		if (currency && /^[A-Z]{3}$/.test(currency) && left !== undefined) result.amounts.push({ label: "booster balance", currency, value: left });
 	}
 	if (!windows.length && !result.amounts.length) throw new Error("Kimi Coding returned no displayable usage data");
-	result.status = `kimi ${windows.slice(0,2).map(bucket => `${bucket.remaining.toFixed(0)}% ${shortWindow(bucket.minutes)}`).join(" · ") || result.amounts.map(a=>`${a.currency} ${a.value}`).join(" · ")}`;
+	result.status = `kimi ${windows.slice(0,2).map(bucket => `${bucket.remaining.toFixed(0)}% ${shortWindow(bucket.minutes)}`).join(" · ") || result.amounts.map(a=>formatMoney(a.currency, a.value, true)).join(" · ")}`;
 	return result;
 }
 
@@ -380,14 +381,14 @@ export function parseZai(provider: string, payload: unknown): ProviderReport {
 
 export function parseBaseten(payload: unknown): ProviderReport {
 	const root = requireObject(payload), result = report("baseten", "spend");
-	if (root.model_apis_usage == null) { result.status = "baseten USD 0 net"; result.lines.push("No Model APIs usage in the last 30 days"); return result; }
+	if (root.model_apis_usage == null) { result.status = "baseten $0.00 net"; result.lines.push("No Model APIs usage in the last 30 days"); return result; }
 	const usage = requireObject(root.model_apis_usage);
 	for (const [label,key] of [["gross usage","total"],["credits used","credits_used"],["net subtotal","subtotal"]] as const) {
 		const value = decimal(usage[key]); if (value === undefined || Number(value) < 0) throw new Error(`Invalid Baseten ${label}`);
-		result.lines.push(`USD ${label}: ${value}`);
+		result.lines.push(`${label}: ${formatMoney("USD", value)}`);
 		if (key === "subtotal") result.amounts.push({ label: "net spend", currency: "USD", value });
 	}
-	result.status = `baseten USD ${result.amounts[0].value} net`;
+	result.status = `baseten ${formatMoney("USD", result.amounts[0].value, true)} net`;
 	return result;
 }
 
@@ -426,7 +427,7 @@ export function parseFireworksBilling(payload: unknown): ProviderReport {
 	for (const [currency,nanos] of totals) result.amounts.push({ label:"30d rated spend", currency, value: formatNanos(nanos) });
 	if (!result.amounts.length) result.lines.push("No rated line items in the last 30 days");
 	result.lines.push("Rated spend may differ from the final invoice after credits or adjustments");
-	result.status = `fireworks ${result.amounts.map(a=>`${a.currency} ${a.value}`).join(" · ") || "no 30d spend"}`;
+	result.status = `fireworks ${result.amounts.map(a=>formatMoney(a.currency, a.value, true)).join(" · ") || "no 30d spend"}`;
 	return result;
 }
 
@@ -496,10 +497,10 @@ export async function fetchBalance(
 
 export function formatBalanceStatus(result: ProviderReport): string {
 	if (result.status) return `${result.status}${result.available === false ? " · API unavailable" : ""}`;
-	const amounts = result.amounts.map(({ currency, value, label }) => `${currency} ${value}${label === "key cap left" ? " key cap left" : ""}`);
+	const amounts = result.amounts.map(({ currency, value, label }) => `${formatMoney(currency, value, true)}${label === "key cap left" ? " key cap left" : ""}`);
 	const content = amounts.join(" · ") || (result.kind === "key-limit" ? "key spend only" : result.kind === "quota" ? result.lines.join(" · ") : result.kind === "spend" ? "spend unavailable" : "balance unavailable");
 	return `${result.provider} ${content}${result.available === false ? " · API unavailable" : ""}`;
 }
 export function formatBalanceReport(result: ProviderReport): string {
-	return [formatBalanceStatus(result), ...result.lines, `As of ${new Date(result.capturedAt).toISOString()}`].join("\n");
+	return [formatBalanceStatus(result), ...result.amounts.map(({ label, currency, value }) => `${label}: ${formatMoney(currency, value)}`), ...result.lines, `As of ${new Date(result.capturedAt).toISOString()}`].join("\n");
 }
