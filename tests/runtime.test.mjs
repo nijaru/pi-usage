@@ -90,3 +90,11 @@ test('transient failure marks an existing value stale rather than presenting a f
   await f.hooks.get('agent_settled')({},f.ctx);
   assert.equal(await waitFor(()=>/12\.00 · stale$/.test(f.statuses.at(-1)??''),250),true);
 });
+
+test('a stalled auth resolver is bounded instead of hanging the handler',async t=>{
+  const f=fixture(t);f.config({requestTimeoutMs:40});
+  f.ctx.modelRegistry.getApiKeyAndHeaders=()=>new Promise(()=>{});
+  await f.hooks.get('session_start')({},f.ctx);
+  const settled=await waitFor(()=>f.statuses.some(x=>x?.includes('usage unavailable')),2000);
+  assert.equal(settled,true,'expected a bounded auth failure, not a hang');
+});

@@ -16,6 +16,19 @@ const status = (report: Report) => "codex" in report ? formatUsageStatus(report.
 /** Footer values carry a leading separator; notifications and reports use `status` directly. */
 const display = (text: string) => text ? `· ${text}` : undefined;
 
+/**
+ * Bound an auth resolution so a stalled credential resolver cannot hang a
+ * handler. `Promise.race` cannot cancel the resolver, but it stops us waiting.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error("Operation timed out")), ms);
+		timer.unref?.();
+	});
+	return Promise.race([promise, timeout]).finally(() => { if (timer) clearTimeout(timer); });
+}
+
 /** One owner for refreshes, cancellation, identity checks, and the existing footer slot. */
 export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionContext) => ResolvedUsageConfig): void {
 	let generation = 0;
@@ -37,7 +50,7 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 	}
 	async function credential(ctx: ExtensionContext, model: PiModel, config: ResolvedUsageConfig): Promise<Credential> {
 		let auth;
-		try { auth = await ctx.modelRegistry.getApiKeyAndHeaders(model); }
+		try { auth = await withTimeout(ctx.modelRegistry.getApiKeyAndHeaders(model), config.requestTimeoutMs); }
 		catch { throw new Error("Provider authentication unavailable"); }
 		if (!auth.ok) throw new Error("Provider authentication unavailable");
 		if (model.provider === "openai-codex") {
