@@ -178,6 +178,8 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 	});
 	pi.on("session_start", async (_event, ctx) => { start(ctx); });
 	pi.on("model_select", async (_event, ctx) => { start(ctx); });
-	pi.on("agent_settled", async (_event, ctx) => { await refresh(ctx); });
+	// Pi 0.87 defers runs requested by other settled handlers until every handler
+	// finishes, so awaiting a network refresh here would delay their continuations.
+	pi.on("agent_settled", (_event, ctx) => { void refresh(ctx); });
 	pi.on("session_shutdown", async (_event, ctx) => { stop(ctx); });
 }
