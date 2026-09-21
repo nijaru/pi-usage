@@ -40,7 +40,7 @@
     "check": "bun run test && oxlint extensions/ tests/ && tsc --noEmit"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.87.0",
     "@types/bun": "latest",
     "oxlint": "latest",
     "typescript": "^6.0.3"
