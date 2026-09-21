@@ -1,6 +1,5 @@
-import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_BASENAME, DEFAULT_POLL_INTERVAL_MS, DEFAULT_REQUEST_TIMEOUT_MS, MAX_POLL_INTERVAL_MS, MAX_REQUEST_TIMEOUT_MS, STATUS_KEY } from "./constants.ts";
 import { DEFAULT_USAGE_URL } from "./usage.ts";
@@ -20,8 +19,9 @@ function finiteNumber(value: unknown): number | undefined {
 	return undefined;
 }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
-export function configPaths(cwd: string, home = homedir()): { project: string; global: string } {
-	return { project: join(cwd, CONFIG_DIR_NAME, "extensions", CONFIG_BASENAME), global: join(home, CONFIG_DIR_NAME, "agent", "extensions", CONFIG_BASENAME) };
+export function configPaths(cwd: string, agentDir = getAgentDir()): { project: string; global: string } {
+	// Honor PI_CODING_AGENT_DIR like the rest of Pi instead of assuming ~/.pi/agent.
+	return { project: join(cwd, CONFIG_DIR_NAME, "extensions", CONFIG_BASENAME), global: join(agentDir, "extensions", CONFIG_BASENAME) };
 }
 export function readConfig(path: string): UsageConfigFile | undefined {
 	if (!existsSync(path)) return undefined;
@@ -46,8 +46,8 @@ export function readConfig(path: string): UsageConfigFile | undefined {
 		return undefined;
 	}
 }
-export function resolveConfig(cwd: string, home = homedir(), includeProject = true): ResolvedUsageConfig {
-	const paths = configPaths(cwd, home), globalConfig = readConfig(paths.global) ?? {};
+export function resolveConfig(cwd: string, agentDir = getAgentDir(), includeProject = true): ResolvedUsageConfig {
+	const paths = configPaths(cwd, agentDir), globalConfig = readConfig(paths.global) ?? {};
 	const projectConfig = includeProject ? readConfig(paths.project) ?? {} : {};
 	const merged = { ...globalConfig, ...projectConfig };
 	const pollIntervalMs = merged.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS, requestTimeoutMs = merged.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;

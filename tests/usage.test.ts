@@ -269,15 +269,15 @@ describe("fetchCodexUsage", () => {
 describe("configuration", () => {
 	test("merges project config over global config", () => {
 		const root = tempRoot("pi-usage-");
-		const home = join(root, "home");
+		const agentDir = join(root, "home", ".pi", "agent");
 		try {
-			const paths = configPaths(root, home);
-			mkdirSync(join(home, ".pi", "agent", "extensions"), { recursive: true });
+			const paths = configPaths(root, agentDir);
+			mkdirSync(join(agentDir, "extensions"), { recursive: true });
 			mkdirSync(join(root, ".pi", "extensions"), { recursive: true });
 			writeFileSync(paths.global, JSON.stringify({ pollIntervalMs: 30_000, requestTimeoutMs: 2_000 }));
 			writeFileSync(paths.project, JSON.stringify({ enabled: false, pollIntervalMs: 90_000 }));
 
-			expect(resolveConfig(root, home)).toEqual({
+			expect(resolveConfig(root, agentDir)).toEqual({
 				enabled: false,
 				pollIntervalMs: 90_000,
 				requestTimeoutMs: 2_000,
@@ -294,8 +294,8 @@ describe("configuration", () => {
 			const path = join(root, ".pi", "extensions", CONFIG_BASENAME);
 			mkdirSync(join(root, ".pi", "extensions"), { recursive: true });
 			writeFileSync(path, JSON.stringify({ pollIntervalMs: 1e20, requestTimeoutMs: 1e20 }));
-			expect(resolveConfig(root, join(root, "home")).pollIntervalMs).toBe(86_400_000);
-			expect(resolveConfig(root, join(root, "home")).requestTimeoutMs).toBe(120_000);
+			expect(resolveConfig(root, join(root, "home", ".pi", "agent")).pollIntervalMs).toBe(86_400_000);
+			expect(resolveConfig(root, join(root, "home", ".pi", "agent")).requestTimeoutMs).toBe(120_000);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
