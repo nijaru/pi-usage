@@ -78,6 +78,8 @@ The Codex `usageUrl` preference remains readable, but the runtime requires the o
 
 `GET /api/v1/key` reports a **per-key cap**, not your account balance. Account credit comes from `GET /api/v1/credits`, which requires a **management key**. With no management credential, key reporting still works and explains the missing account-credit capability.
 
+The footer shows `openrouter $25.00 cap $10.00` when both account credit and a remaining key allowance are available. `cap` means the amount left, not the configured total limit. Either value can appear alone; when neither is available, the footer is hidden. `/usage` retains spending and cap details.
+
 Use environment-variable names in the **global user file only**:
 
 ```json

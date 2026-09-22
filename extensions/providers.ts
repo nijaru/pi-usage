@@ -496,11 +496,16 @@ export async function fetchBalance(
 }
 
 export function formatBalanceStatus(result: ProviderReport): string {
+	if (result.provider === "openrouter") {
+		const parts = result.amounts.map(({ currency, value, label }) =>
+			`${label === "key cap left" ? "cap " : ""}${formatMoney(currency, value, true)}`);
+		return parts.length ? `openrouter ${parts.join(" ")}` : "";
+	}
 	if (result.status) return `${result.status}${result.available === false ? " · API unavailable" : ""}`;
 	const amounts = result.amounts.map(({ currency, value, label }) => `${formatMoney(currency, value, true)}${label === "key cap left" ? " key cap left" : ""}`);
 	const content = amounts.join(" · ") || (result.kind === "key-limit" ? "key spend only" : result.kind === "quota" ? result.lines.join(" · ") : result.kind === "spend" ? "spend unavailable" : "balance unavailable");
 	return `${result.provider} ${content}${result.available === false ? " · API unavailable" : ""}`;
 }
 export function formatBalanceReport(result: ProviderReport): string {
-	return [formatBalanceStatus(result), ...result.amounts.map(({ label, currency, value }) => `${label}: ${formatMoney(currency, value)}`), ...result.lines, `As of ${new Date(result.capturedAt).toISOString()}`].join("\n");
+	return [formatBalanceStatus(result) || result.provider, ...result.amounts.map(({ label, currency, value }) => `${label}: ${formatMoney(currency, value)}`), ...result.lines, `As of ${new Date(result.capturedAt).toISOString()}`].join("\n");
 }

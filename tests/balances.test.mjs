@@ -27,12 +27,18 @@ test('OpenRouter key cap is not an account balance', () => {
   const unlimited = parseOpenRouter({ data: { limit: null, usage: 20 } });
   assert.equal(unlimited.kind, 'key-limit');
   assert.equal(unlimited.amounts.length, 0);
-  assert.match(formatBalanceStatus(unlimited), /key spend only/);
+  assert.equal(formatBalanceStatus(unlimited), '');
+  assert.match(formatBalanceReport(unlimited), /^openrouter\n/);
+  assert.match(formatBalanceReport(unlimited), /spent: \$20/);
+  assert.equal(formatBalanceStatus(addOpenRouterCredits(unlimited, { data: { total_credits: 25, total_usage: 0 } })), 'openrouter $25.00');
   const limited = parseOpenRouter({ data: { limit: 50, limit_remaining: 30, usage: 20 } });
-  assert.match(formatBalanceStatus(limited), /\$30\.00 key cap left/);
+  assert.equal(formatBalanceStatus(limited), 'openrouter cap $30.00');
+  assert.equal(formatBalanceStatus(parseOpenRouter({ data: { limit: 50, limit_remaining: 0 } })), 'openrouter cap $0.00');
   const credited = addOpenRouterCredits(limited, { data: { total_credits: 100.5, total_usage: 25.75 } });
   assert.equal(credited.amounts[0].value, '74.75');
   assert.equal(credited.amounts[1].value, '30');
+  assert.equal(formatBalanceStatus(credited), 'openrouter $74.75 cap $30.00');
+  assert.match(formatBalanceReport(credited), /key cap left: \$30/);
 });
 test('zero balances remain distinguishable from missing values', () => {
   assert.equal(parseDeepSeek({ ...data, balance_infos: [{ currency: 'USD', total_balance: '0.00' }] }).amounts[0].value, '0.00');
