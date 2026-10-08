@@ -1,6 +1,8 @@
 /** Read-only provider balances, quota, and rated spend. Endpoint contracts are documented in README.md. */
 import { createHash } from "node:crypto";
 import { formatMoney } from "./money.ts";
+import { getJsonHeaders, type Fetcher } from "./http.ts";
+export type { Fetcher } from "./http.ts";
 
 export interface ProviderModel { provider: string; id: string; baseUrl: string; }
 export interface ResolvedAuth {
@@ -19,7 +21,6 @@ export interface ProviderReport {
 	available?: boolean;
 	capturedAt: number;
 }
-export type Fetcher = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 const ORIGINS: Record<string, string[]> = {
 	deepseek: ["https://api.deepseek.com"],
@@ -99,40 +100,6 @@ export function officialIdentity(model: ProviderModel, auth: ResolvedAuth): Iden
 	return { provider: model.provider, model, token, origin, fingerprint: fingerprint(`${model.provider}\0${origin}\0${token}`) };
 }
 
-async function getJsonHeaders(
-	url: string, headers: Record<string, string>, signal: AbortSignal, fetcher: Fetcher = globalThis.fetch,
-): Promise<unknown> {
-	signal.throwIfAborted();
-	const response = await fetcher(url, { method: "GET", headers: { ...headers, Accept: "application/json" }, redirect: "error", signal });
-	if (!response.ok) throw new Error(`Usage request failed (${response.status})`);
-	const reader = response.body?.getReader();
-	if (!reader) throw new Error("Empty usage response");
-	const chunks: Uint8Array[] = [];
-	let size = 0;
-	const abort = () => { void reader.cancel().catch(() => {}); };
-	signal.addEventListener("abort", abort, { once: true });
-	try {
-		while (true) {
-			signal.throwIfAborted();
-			const { done, value } = await reader.read();
-			if (done) break;
-			size += value.length;
-			if (size > 1024 * 1024) throw new Error("Usage response exceeds 1 MiB");
-			chunks.push(value);
-		}
-		signal.throwIfAborted();
-		const bytes = new Uint8Array(size);
-		let offset = 0;
-		for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-		try { return JSON.parse(new TextDecoder().decode(bytes)); }
-		catch { throw new Error("Invalid usage JSON"); }
-	} finally {
-		signal.removeEventListener("abort", abort);
-		await reader.cancel().catch(() => {});
-		reader.releaseLock();
-	}
-}
-
 export async function getJson(
 	url: string, token: string, signal: AbortSignal, fetcher: Fetcher = globalThis.fetch,
 ): Promise<unknown> {
@@ -151,6 +118,8 @@ function requireObject(payload: unknown): Record<string, unknown> {
 	return payload;
 }
 function cleanLabel(value: unknown, fallback: string): string {
+	// Remote labels must not inject terminal controls into status or report text.
+	// oxlint-disable-next-line no-control-regex
 	return typeof value === "string" && value.trim() ? value.replace(/[\x00-\x1f\x7f-\x9f]/g, "").slice(0, 80) : fallback;
 }
 function percent(value: unknown): number | undefined {
@@ -404,30 +373,47 @@ export function parseFireworksAccounts(payload: unknown): string[] {
 	if (new Set(ids).size !== ids.length) throw new Error("Duplicate Fireworks account");
 	return ids;
 }
+function moneyInteger(value: unknown): bigint {
+	if (value === undefined) return 0n;
+	if (typeof value === "number" && Number.isSafeInteger(value)) return BigInt(value);
+	if (typeof value === "string" && value.length <= 20 && /^-?\d+$/.test(value)) return BigInt(value);
+	throw new Error("Invalid Fireworks money integer");
+}
 function fireworksMoney(value: unknown): { currency: string; nanos: bigint } {
-	const money = requireObject(value), currency = money.currencyCode;
+	const money = requireObject(value);
+	const currency = money.currencyCode;
 	if (typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) throw new Error("Invalid Fireworks currency");
-	const parseInt64 = (v: unknown) => v === undefined ? 0n : typeof v === "number" && Number.isSafeInteger(v) ? BigInt(v) : typeof v === "string" && /^-?\d+$/.test(v) && v.length <= 20 ? BigInt(v) : (()=>{throw new Error("Invalid Fireworks money integer")})();
-	const units = parseInt64(money.units), nanos = parseInt64(money.nanos);
-	if (nanos <= -1_000_000_000n || nanos >= 1_000_000_000n || (units > 0n && nanos < 0n) || (units < 0n && nanos > 0n)) throw new Error("Invalid Fireworks money range");
-	return { currency, nanos: units*1_000_000_000n+nanos };
+	const units = moneyInteger(money.units);
+	const nanos = moneyInteger(money.nanos);
+	if (nanos <= -1_000_000_000n || nanos >= 1_000_000_000n || (units > 0n && nanos < 0n) || (units < 0n && nanos > 0n)) {
+		throw new Error("Invalid Fireworks money range");
+	}
+	return { currency, nanos: units * 1_000_000_000n + nanos };
 }
 function formatNanos(value: bigint): string {
-	const negative = value < 0n, n = negative ? -value : value, whole = n/1_000_000_000n, frac=(n%1_000_000_000n).toString().padStart(9,"0").replace(/0+$/,"");
-	return `${negative?"-":""}${whole}${frac?`.${frac}`:""}`;
+	const negative = value < 0n;
+	const absolute = negative ? -value : value;
+	const whole = absolute / 1_000_000_000n;
+	const fraction = (absolute % 1_000_000_000n).toString().padStart(9, "0").replace(/0+$/, "");
+	return `${negative ? "-" : ""}${whole}${fraction ? `.${fraction}` : ""}`;
 }
 export function parseFireworksBilling(payload: unknown): ProviderReport {
-	const root = requireObject(payload), result = report("fireworks", "spend"), totals = new Map<string,bigint>();
+	const root = requireObject(payload);
+	const result = report("fireworks", "spend");
+	const totals = new Map<string, bigint>();
 	if (root.lineItems !== undefined && !Array.isArray(root.lineItems)) throw new Error("Invalid Fireworks lineItems");
 	const lineItems = Array.isArray(root.lineItems) ? root.lineItems : [];
 	for (const raw of lineItems) {
 		if (!object(raw)) throw new Error("Invalid Fireworks line item");
-		const money = fireworksMoney(raw.totalCost); totals.set(money.currency,(totals.get(money.currency)??0n)+money.nanos);
+		const money = fireworksMoney(raw.totalCost);
+		totals.set(money.currency, (totals.get(money.currency) ?? 0n) + money.nanos);
 	}
-	for (const [currency,nanos] of totals) result.amounts.push({ label:"30d rated spend", currency, value: formatNanos(nanos) });
+	for (const [currency, nanos] of totals) {
+		result.amounts.push({ label: "30d rated spend", currency, value: formatNanos(nanos) });
+	}
 	if (!result.amounts.length) result.lines.push("No rated line items in the last 30 days");
 	result.lines.push("Rated spend may differ from the final invoice after credits or adjustments");
-	result.status = `fireworks ${result.amounts.map(a=>formatMoney(a.currency, a.value, true)).join(" · ") || "no 30d spend"}`;
+	result.status = `fireworks ${result.amounts.map(a => formatMoney(a.currency, a.value, true)).join(" · ") || "no 30d spend"}`;
 	return result;
 }
 

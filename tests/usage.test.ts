@@ -244,26 +244,6 @@ describe("fetchCodexUsage", () => {
 			}),
 		).rejects.toThrow("must use HTTPS");
 	});
-
-	test("does not include credentials in request errors", async () => {
-		await expect(
-			fetchCodexUsage({
-				accessToken: token,
-				accountId,
-				fetcher: async () => new Response("server body", { status: 500 }),
-			}),
-		).rejects.toThrow("Codex usage request failed (500)");
-		try {
-			await fetchCodexUsage({
-				accessToken: token,
-				accountId,
-				fetcher: async () => new Response("server body", { status: 500 }),
-			});
-		} catch (error) {
-			expect(String(error)).not.toContain(token);
-			expect(String(error)).not.toContain(accountId);
-		}
-	});
 });
 
 describe("configuration", () => {

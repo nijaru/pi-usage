@@ -51,6 +51,27 @@ test('model switch and shutdown reject stale request completion',async t=>{
   await f.hooks.get('session_start')({},f.ctx);await tick();f.ctx.model={provider:'other',id:'x',baseUrl:'https://other.test'};await f.hooks.get('model_select')({},f.ctx);release(balance('99.00'));await tick();
   assert.equal(f.statuses.at(-1),undefined);
 });
+for (const event of ['session_shutdown', 'model_select']) test(`a late credential lookup cannot start a request after ${event}`, async t => {
+  const f = fixture(t);
+  let release;
+  let authCalls = 0;
+  let requests = 0;
+  f.ctx.modelRegistry.getApiKeyAndHeaders = async () => {
+    if (++authCalls === 1) await new Promise(resolve => { release = resolve; });
+    return { ok: true, apiKey: 'key-a' };
+  };
+  globalThis.fetch = async () => { requests++; return balance(); };
+  await f.hooks.get('session_start')({}, f.ctx);
+  await tick();
+  if (event === 'model_select') f.ctx.model = { provider: 'other', id: 'x', baseUrl: 'https://other.test' };
+  await f.hooks.get(event)({}, f.ctx);
+  release();
+  await tick();
+  await tick();
+  assert.equal(requests, 0);
+  assert.equal(f.statuses.some(Boolean), false);
+});
+
 test('errors do not become a zero balance or leak server response bodies',async t=>{
   const f=fixture(t);globalThis.fetch=async()=>new Response('SECRET-RESPONSE',{status:403});
   await f.commands.get('usage').handler('',f.ctx);
@@ -88,7 +109,7 @@ test('transient failure marks an existing value stale rather than presenting a f
   globalThis.fetch=async()=>fail?new Response('error',{status:503}):balance();
   await f.hooks.get('session_start')({},f.ctx);await tick();fail=true;
   await f.hooks.get('agent_settled')({},f.ctx);
-  assert.equal(await waitFor(()=>/12\.00 · stale$/.test(f.statuses.at(-1)??''),250),true);
+  assert.equal(await waitFor(()=>(f.statuses.at(-1)??'').endsWith('12.00 · stale'),250),true);
 });
 
 test('a stalled auth resolver is bounded instead of hanging the handler',async t=>{

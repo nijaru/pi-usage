@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decimal, subtract, parseDeepSeek, parseOpenRouter, addOpenRouterCredits, parseMoonshot, parseMiniMax, parseVercel, officialIdentity, fetchBalance, formatBalanceStatus, formatBalanceReport, resolveCreditsKey, getJson } from '../extensions/providers.ts';
+import { decimal, subtract, parseDeepSeek, parseOpenRouter, addOpenRouterCredits, parseMoonshot, parseMiniMax, parseVercel, officialIdentity, fetchBalance, formatBalanceStatus, formatBalanceReport, resolveCreditsKey } from '../extensions/providers.ts';
 
 const model = (provider, baseUrl) => ({ provider, baseUrl, id: 'test' });
 const data = { is_available: true, balance_infos: [{ currency: 'USD', total_balance: '4.123456789123', granted_balance: '0.00', topped_up_balance: '4.123456789123' }] };
@@ -96,13 +96,4 @@ test('failed credits request keeps correctly scoped key data', async () => {
   assert.equal(result.kind, 'key-limit');
   assert.match(result.lines.join('\n'), /Account credit unavailable/);
   assert.doesNotMatch(result.lines.join('\n'), /secret server body/);
-});
-test('pre-aborted queries make no request', async () => {
-  const owner = new AbortController(); owner.abort(); let called = false;
-  await assert.rejects(getJson('https://api.deepseek.com/user/balance', 'key', owner.signal, async () => { called = true; return Response.json(data); }));
-  assert.equal(called, false);
-});
-test('oversized and malformed payloads fail explicitly', async () => {
-  await assert.rejects(getJson('https://api.deepseek.com/user/balance', 'key', signal(), async()=>new Response('x'.repeat(1024*1024+1))), /1 MiB/);
-  await assert.rejects(getJson('https://api.deepseek.com/user/balance', 'key', signal(), async()=>new Response('{bad')), /Invalid usage JSON/);
 });

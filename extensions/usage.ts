@@ -1,4 +1,5 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS, MAX_REQUEST_TIMEOUT_MS } from "./constants.ts";
+import { getJsonHeaders, type Fetcher } from "./http.ts";
 
 export const CODEX_PROVIDER = "openai-codex";
 export const DEFAULT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
@@ -26,7 +27,7 @@ export interface FetchCodexUsageOptions {
 	fetcher?: FetchLike;
 }
 
-export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
+export type FetchLike = Fetcher;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -223,21 +224,13 @@ export async function fetchCodexUsage(options: FetchCodexUsageOptions): Promise<
 
 	const linked = linkedSignal(options.signal, timeoutMs);
 	try {
-		const response = await fetcher(usageUrl, {
-			method: "GET",
-			headers: {
-				Accept: "application/json",
-				Authorization: `Bearer ${options.accessToken}`,
-				"ChatGPT-Account-Id": options.accountId,
-				Origin: "https://chatgpt.com",
-				Referer: "https://chatgpt.com/",
-				"User-Agent": USER_AGENT,
-			},
-			redirect: "error",
-			signal: linked.signal,
-		});
-		if (!response.ok) throw new Error(`Codex usage request failed (${response.status})`);
-		return parseCodexUsage(await response.json());
+		return parseCodexUsage(await getJsonHeaders(usageUrl, {
+			Authorization: `Bearer ${options.accessToken}`,
+			"ChatGPT-Account-Id": options.accountId,
+			Origin: "https://chatgpt.com",
+			Referer: "https://chatgpt.com/",
+			"User-Agent": USER_AGENT,
+		}, linked.signal, fetcher, "Codex usage"));
 	} finally {
 		linked.cancel();
 	}

@@ -130,6 +130,7 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 		try {
 			// Back off failures between frequent tool/assistant turns, but still check account identity.
 			const auth = await credential(ctx, model, readConfig(ctx));
+			if (owner !== generation) return;
 			const cached = cache.get(model.provider);
 			if (cached && cached.identity !== auth.identity) { cache.delete(model.provider); ctx.ui.setStatus(STATUS_KEY, undefined); }
 			const key = auth.identity;
@@ -174,7 +175,7 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 			const providers = selected === "all"
 				? [...new Set([ctx.model?.provider, ...ctx.modelRegistry.getAvailable().map(model => model.provider)])].filter((provider): provider is string => Boolean(provider && supported(provider)))
 				: [selected];
-			const owner = generation, results: string[] = new Array(providers.length);
+			const owner = generation, results = providers.map(() => "");
 			let next = 0;
 			await Promise.all(Array.from({ length: Math.min(2, providers.length) }, async () => {
 				while (next < providers.length && owner === generation) {
