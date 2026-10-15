@@ -90,6 +90,60 @@ test('/usage all is explicit and limits concurrent provider queries to two',asyn
   assert.equal(peak,2);assert.match(f.notifications.at(-1),/deepseek \$12/);assert.match(f.notifications.at(-1),/vercel-ai-gateway \$4/);
   assert.equal(f.statuses.at(-1),'· deepseek $12.00');
 });
+for (const change of ['key', 'dropped auth', 'auth endpoint', 'model endpoint', 'official auth endpoint', 'official model endpoint', 'management key', 'dropped management key']) {
+  test(`/usage all revalidates a finished report after ${change} changes`, async t => {
+    const management = change.includes('management');
+    const fast = management ? {provider:'openrouter',id:'x',baseUrl:'https://openrouter.ai/api/v1'} : {...deepseek};
+    const slow = {provider:'vercel-ai-gateway',id:'x',baseUrl:'https://ai-gateway.vercel.sh/v1'};
+    const models = [fast, slow], f = fixture(t, models);
+    let auth = {ok:true,apiKey:'key-a'}, release, calls = 0;
+    f.ctx.modelRegistry.getApiKeyAndHeaders = async model => model.provider === fast.provider ? auth : {ok:true,apiKey:'slow-key'};
+    if (management) {
+      const names = ['PI_USAGE_TEST_INFERENCE', 'PI_USAGE_TEST_MANAGEMENT'];
+      const previous = names.map(name => process.env[name]);
+      t.after(() => names.forEach((name, index) => {
+        if (previous[index] === undefined) delete process.env[name]; else process.env[name] = previous[index];
+      }));
+      process.env[names[0]] = 'key-a'; process.env[names[1]] = 'management-a';
+      f.config({openrouterCredits:{inferenceKeyEnv:names[0],managementKeyEnv:names[1]}});
+    }
+    globalThis.fetch = async url => {
+      calls++;
+      if (String(url).includes('vercel')) return new Promise(resolve => { release = resolve; });
+      if (String(url).endsWith('/credits')) return Response.json({data:{total_credits:100,total_usage:1}});
+      return management ? Response.json({data:{limit:null,usage:3}}) : balance('99.00');
+    };
+    const pending = f.commands.get('usage').handler('all', f.ctx);
+    assert.equal(await waitFor(() => release && f.statuses.at(-1)?.includes('$99')), true);
+    switch (change) {
+      case 'key': auth = {ok:true,apiKey:'key-b'}; break;
+      case 'dropped auth': auth = {ok:false}; break;
+      case 'auth endpoint': auth = {...auth,baseUrl:'https://proxy.example'}; break;
+      case 'model endpoint': models[0] = f.ctx.model = {...fast,baseUrl:'https://proxy.example'}; break;
+      case 'official auth endpoint': auth = {...auth,baseUrl:'https://api.deepseek.com/v1'}; break;
+      case 'official model endpoint': models[0] = f.ctx.model = {...fast,baseUrl:'https://api.deepseek.com/v1'}; break;
+      case 'management key': process.env.PI_USAGE_TEST_MANAGEMENT = 'management-b'; break;
+      case 'dropped management key': delete process.env.PI_USAGE_TEST_MANAGEMENT; break;
+    }
+    release(Response.json({balance:'4.00'}));
+    await pending;
+    assert.doesNotMatch(f.notifications.at(-1), /\$99/);
+    assert.match(f.notifications.at(-1), /vercel-ai-gateway \$4/);
+    assert.equal(f.statuses.at(-1), undefined);
+    assert.equal(calls, management ? 3 : 2, 'revalidation must not repeat provider requests');
+  });
+}
+
+test('/usage all isolates provider errors from successful reports', async t => {
+  const f = fixture(t, [deepseek, {provider:'openrouter',id:'x',baseUrl:'https://openrouter.ai/api/v1'}]);
+  globalThis.fetch = async url => String(url).includes('deepseek') ? balance() : new Response('SECRET', {status:503});
+  await f.commands.get('usage').handler('all', f.ctx);
+  assert.match(f.notifications.at(-1), /deepseek \$12.00/);
+  assert.match(f.notifications.at(-1), /openrouter:.*503/);
+  assert.doesNotMatch(f.notifications.at(-1), /SECRET/);
+  assert.equal(f.statuses.at(-1), '· deepseek $12.00');
+});
+
 test('a configured proxy cannot send its credential to an official billing endpoint',async t=>{
   const f=fixture(t,[{...deepseek,baseUrl:'https://proxy.example'}]);let calls=0;globalThis.fetch=async()=>{calls++;return balance();};
   await f.commands.get('usage').handler('',f.ctx);assert.equal(calls,0);assert.match(f.notifications.at(-1),/official endpoint/);

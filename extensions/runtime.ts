@@ -66,11 +66,11 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 			const accountHeader = Object.entries(auth.headers ?? {}).find(([key]) => key.toLowerCase() === "chatgpt-account-id")?.[1];
 			const accountId = typeof accountHeader === "string" ? accountHeader : token ? accountIdFromAccessToken(token) : undefined;
 			if (!token || !accountId) throw new Error("Codex account unavailable");
-			return { token, accountId, identity: fingerprint(`${model.provider}\0${auth.baseUrl ?? model.baseUrl}\0${token}\0${accountId}`) };
+			return { token, accountId, identity: fingerprint(`${model.provider}\0${model.baseUrl}\0${auth.baseUrl ?? model.baseUrl}\0${config.usageUrl}\0${token}\0${accountId}`) };
 		}
 		const resolved = officialIdentity(model, auth);
 		const creditsKey = resolveCreditsKey(resolved, config.openrouterCredits);
-		return { token: resolved.token, creditsKey, identity: fingerprint(`${resolved.fingerprint}\0${creditsKey ?? ""}`) };
+		return { token: resolved.token, creditsKey, identity: fingerprint(`${resolved.fingerprint}\0${model.baseUrl}\0${auth.baseUrl ?? model.baseUrl}\0${creditsKey ?? ""}`) };
 	}
 
 	async function query(ctx: ExtensionContext, model: PiModel, force = false): Promise<Cached> {
@@ -175,7 +175,8 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 			const providers = selected === "all"
 				? [...new Set([ctx.model?.provider, ...ctx.modelRegistry.getAvailable().map(model => model.provider)])].filter((provider): provider is string => Boolean(provider && supported(provider)))
 				: [selected];
-			const owner = generation, results = providers.map(() => "");
+			const owner = generation;
+			const results: (string | { model: PiModel; value: Cached })[] = providers.map(() => "");
 			let next = 0;
 			await Promise.all(Array.from({ length: Math.min(2, providers.length) }, async () => {
 				while (next < providers.length && owner === generation) {
@@ -183,14 +184,38 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 					if (!model) { results[index] = `${provider}: no authenticated model configured`; continue; }
 					try {
 						const value = await query(ctx, model, true);
-						results[index] = "codex" in value.report ? `Codex usage: ${status(value.report)}` : formatBalanceReport(value.report.balance);
+						results[index] = { model, value };
 						if (ctx.model?.provider === model.provider && ctx.model?.id === model.id && owner === generation) ctx.ui.setStatus(STATUS_KEY, display(status(value.report)));
 					} catch (error) {
 						results[index] = `${provider}: ${error instanceof Error ? error.message : "usage unavailable"}`;
 					}
 				}
 			}));
-			if (owner === generation) ctx.ui.notify(results.filter(Boolean).join("\n\n") || "No supported authenticated providers configured", "info");
+			if (owner !== generation) return;
+			// A completed query can outlive its account while other providers finish.
+			// Resolve current routing/auth again, without repeating any provider requests.
+			const reports = await Promise.all(results.map(async result => {
+				if (typeof result === "string") return result;
+				const { model, value } = result;
+				let same = false;
+				try {
+					const current = choose(ctx, model.provider), config = readConfig(ctx);
+					same = Boolean(config.enabled && current && current.id === model.id &&
+						(await credential(ctx, current, config)).identity === value.identity);
+				} catch { /* Missing credentials or invalid routing also invalidate the report. */ }
+				if (owner !== generation) return "";
+				if (!same) {
+					// Do not evict or clear a newer account's concurrently refreshed value.
+					const cached = cache.get(model.provider);
+					if (!cached || cached.identity === value.identity) {
+						cache.delete(model.provider);
+						if (ctx.model?.provider === model.provider) ctx.ui.setStatus(STATUS_KEY, undefined);
+					}
+					return `${model.provider}: usage unavailable (account or authentication changed)`;
+				}
+				return "codex" in value.report ? `Codex usage: ${status(value.report)}` : formatBalanceReport(value.report.balance);
+			}));
+			if (owner === generation) ctx.ui.notify(reports.filter(Boolean).join("\n\n") || "No supported authenticated providers configured", "info");
 		},
 	});
 	pi.on("session_start", async (_event, ctx) => { start(ctx); });
