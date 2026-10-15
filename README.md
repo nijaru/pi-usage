@@ -23,6 +23,8 @@ Reload Pi when no child jobs are running. Existing installations can use Pi's ta
 /usage all             Query supported configured providers, two at a time
 ```
 
+`/usage all` reports each provider as it finishes, after checking that account's credentials again. It does not hold account-bound reports behind slower providers.
+
 Only the active provider is polled automatically. Other-provider reports are explicit and never replace the active footer. Headless sessions do not poll. The extension adds no model tools and does not change inference requests. `/fast`, service tiers, and Fast-mode pricing remain entirely in `pi-fast-mode`.
 
 ## Reported data

@@ -10,7 +10,7 @@ import {
 type PiModel = NonNullable<ExtensionContext["model"]>;
 type Report = { codex: CodexUsage } | { balance: ProviderReport };
 interface Cached { identity: string; fetchedAt: number; report: Report; stale?: boolean; }
-interface Credential { identity: string; token: string; accountId?: string; creditsKey?: string; }
+interface Credential { identity: string; token: string; accountId?: string; creditsKey?: string; config: ResolvedUsageConfig; }
 const supported = (provider: string) => provider === "openai-codex" || isBalanceProvider(provider);
 const status = (report: Report, stale = false) => {
 	const text = "codex" in report ? formatUsageStatus(report.codex) : formatBalanceStatus(report.balance);
@@ -51,11 +51,18 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 		controllers.clear(); requests.clear(); cache.clear(); lastAttempt.clear();
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	}
-	async function credential(ctx: ExtensionContext, model: PiModel, config: ResolvedUsageConfig): Promise<Credential> {
+	async function credential(ctx: ExtensionContext, model: PiModel): Promise<Credential> {
 		let auth;
-		try { auth = await withTimeout(ctx.modelRegistry.getApiKeyAndHeaders(model), config.requestTimeoutMs); }
+		try { auth = await withTimeout(ctx.modelRegistry.getApiKeyAndHeaders(model), readConfig(ctx).requestTimeoutMs); }
 		catch { throw new Error("Provider authentication unavailable"); }
 		if (!auth.ok) throw new Error("Provider authentication unavailable");
+		// Auth may run a slow command. Read preferences/bindings only afterward,
+		// and reject a model whose route changed while its auth was resolving.
+		const config = readConfig(ctx), current = choose(ctx, model.provider);
+		if (!config.enabled) throw new Error("Usage display is disabled");
+		if (!current || current.id !== model.id || current.api !== model.api || current.baseUrl !== model.baseUrl || JSON.stringify(current.headers) !== JSON.stringify(model.headers)) {
+			throw new DOMException("Provider routing changed", "AbortError");
+		}
 		if (model.provider === "openai-codex") {
 			for (const value of [model.baseUrl, auth.baseUrl ?? model.baseUrl, config.usageUrl]) {
 				const url = new URL(value);
@@ -66,17 +73,17 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 			const accountHeader = Object.entries(auth.headers ?? {}).find(([key]) => key.toLowerCase() === "chatgpt-account-id")?.[1];
 			const accountId = typeof accountHeader === "string" ? accountHeader : token ? accountIdFromAccessToken(token) : undefined;
 			if (!token || !accountId) throw new Error("Codex account unavailable");
-			return { token, accountId, identity: fingerprint(`${model.provider}\0${model.baseUrl}\0${auth.baseUrl ?? model.baseUrl}\0${config.usageUrl}\0${token}\0${accountId}`) };
+			return { token, accountId, config, identity: fingerprint(`${model.provider}\0${model.baseUrl}\0${auth.baseUrl ?? model.baseUrl}\0${config.usageUrl}\0${token}\0${accountId}`) };
 		}
 		const resolved = officialIdentity(model, auth);
 		const creditsKey = resolveCreditsKey(resolved, config.openrouterCredits);
-		return { token: resolved.token, creditsKey, identity: fingerprint(`${resolved.fingerprint}\0${model.baseUrl}\0${auth.baseUrl ?? model.baseUrl}\0${creditsKey ?? ""}`) };
+		return { token: resolved.token, creditsKey, config, identity: fingerprint(`${resolved.fingerprint}\0${model.baseUrl}\0${auth.baseUrl ?? model.baseUrl}\0${creditsKey ?? ""}`) };
 	}
 
 	async function query(ctx: ExtensionContext, model: PiModel, force = false): Promise<Cached> {
-		const owner = generation, config = readConfig(ctx);
-		if (!config.enabled) throw new Error("Usage display is disabled");
-		const auth = await credential(ctx, model, config);
+		const owner = generation;
+		const auth = await credential(ctx, model);
+		const config = auth.config;
 		if (owner !== generation) throw new DOMException("Session changed", "AbortError");
 		const previous = cache.get(model.provider);
 		if (previous && previous.identity !== auth.identity) {
@@ -99,7 +106,7 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 					result = { balance: await fetchBalance({ provider: model.provider, model, token: auth.token, fingerprint: auth.identity }, controller.signal, undefined, auth.creditsKey) };
 				}
 				controller.signal.throwIfAborted();
-				const current = await credential(ctx, model, readConfig(ctx));
+				const current = await credential(ctx, model);
 				if (owner !== generation || current.identity !== auth.identity) {
 					if (cache.get(model.provider)?.identity === auth.identity) cache.delete(model.provider);
 					throw new DOMException("Account or session changed", "AbortError");
@@ -129,7 +136,7 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 		if (!readConfig(ctx).enabled) { stop(ctx); return; }
 		try {
 			// Back off failures between frequent tool/assistant turns, but still check account identity.
-			const auth = await credential(ctx, model, readConfig(ctx));
+			const auth = await credential(ctx, model);
 			if (owner !== generation) return;
 			const cached = cache.get(model.provider);
 			if (cached && cached.identity !== auth.identity) { cache.delete(model.provider); ctx.ui.setStatus(STATUS_KEY, undefined); }
@@ -145,7 +152,7 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 			const value = cache.get(model.provider);
 			// Recheck identity even on failures; a stale display must never belong to another account.
 			let same = false;
-			try { same = value?.identity === (await credential(ctx, model, readConfig(ctx))).identity; } catch { /* Unavailable auth clears old values. */ }
+			try { same = value?.identity === (await credential(ctx, model)).identity; } catch { /* Unavailable auth clears old values. */ }
 			if (owner !== generation) return;
 			ctx.ui.setStatus(STATUS_KEY, value && same ? display(status(value.report, value.stale || !cancelled)) : cancelled ? undefined : display(`${model.provider} usage unavailable`));
 		}
@@ -163,6 +170,13 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 		if (ctx.model?.provider === provider) return ctx.model;
 		return ctx.modelRegistry.getAvailable().find(model => model.provider === provider);
 	}
+	function discard(ctx: ExtensionContext, model: PiModel, value: Cached): void {
+		const cached = cache.get(model.provider);
+		// A concurrent refresh may already own a newer account's value.
+		if (cached && cached.identity !== value.identity) return;
+		cache.delete(model.provider);
+		if (ctx.model?.provider === model.provider) ctx.ui.setStatus(STATUS_KEY, undefined);
+	}
 	pi.registerCommand("usage", {
 		description: "Show quota or balance: /usage [provider|all]",
 		handler: async (args, ctx) => {
@@ -176,46 +190,39 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 				? [...new Set([ctx.model?.provider, ...ctx.modelRegistry.getAvailable().map(model => model.provider)])].filter((provider): provider is string => Boolean(provider && supported(provider)))
 				: [selected];
 			const owner = generation;
-			const results: (string | { model: PiModel; value: Cached })[] = providers.map(() => "");
+			if (!providers.length) { ctx.ui.notify("No supported authenticated providers configured", "info"); return; }
 			let next = 0;
 			await Promise.all(Array.from({ length: Math.min(2, providers.length) }, async () => {
 				while (next < providers.length && owner === generation) {
-					const index = next++, provider = providers[index], model = choose(ctx, provider);
-					if (!model) { results[index] = `${provider}: no authenticated model configured`; continue; }
+					const provider = providers[next++], model = choose(ctx, provider);
+					if (!model) { ctx.ui.notify(`${provider}: no authenticated model configured`, "info"); continue; }
+					let value: Cached | undefined;
 					try {
-						const value = await query(ctx, model, true);
-						results[index] = { model, value };
-						if (ctx.model?.provider === model.provider && ctx.model?.id === model.id && owner === generation) ctx.ui.setStatus(STATUS_KEY, display(status(value.report)));
+						value = await query(ctx, model, true);
+						const current = choose(ctx, provider);
+						if (!current || current.id !== model.id || (await credential(ctx, current)).identity !== value.identity) {
+							throw new DOMException("Account or authentication changed", "AbortError");
+						}
+						if (owner !== generation) return;
+						// Publish immediately after this account's validation. Holding a
+						// validated report behind another provider's async work is unsafe.
+						if (ctx.model?.provider === model.provider && ctx.model?.id === model.id) ctx.ui.setStatus(STATUS_KEY, display(status(value.report)));
+						ctx.ui.notify("codex" in value.report ? `Codex usage: ${status(value.report)}` : formatBalanceReport(value.report.balance), "info");
 					} catch (error) {
-						results[index] = `${provider}: ${error instanceof Error ? error.message : "usage unavailable"}`;
+						if (owner !== generation) return;
+						if (value) discard(ctx, model, value);
+						ctx.ui.notify(`${provider}: ${error instanceof Error ? error.message : "usage unavailable"}`, "info");
 					}
 				}
 			}));
-			if (owner !== generation) return;
-			// A completed query can outlive its account while other providers finish.
-			// Resolve current routing/auth again, without repeating any provider requests.
-			const reports = await Promise.all(results.map(async result => {
-				if (typeof result === "string") return result;
-				const { model, value } = result;
-				let same = false;
-				try {
-					const current = choose(ctx, model.provider), config = readConfig(ctx);
-					same = Boolean(config.enabled && current && current.id === model.id &&
-						(await credential(ctx, current, config)).identity === value.identity);
-				} catch { /* Missing credentials or invalid routing also invalidate the report. */ }
-				if (owner !== generation) return "";
-				if (!same) {
-					// Do not evict or clear a newer account's concurrently refreshed value.
-					const cached = cache.get(model.provider);
-					if (!cached || cached.identity === value.identity) {
-						cache.delete(model.provider);
-						if (ctx.model?.provider === model.provider) ctx.ui.setStatus(STATUS_KEY, undefined);
-					}
-					return `${model.provider}: usage unavailable (account or authentication changed)`;
-				}
-				return "codex" in value.report ? `Codex usage: ${status(value.report)}` : formatBalanceReport(value.report.balance);
-			}));
-			if (owner === generation) ctx.ui.notify(reports.filter(Boolean).join("\n\n") || "No supported authenticated providers configured", "info");
+			// The active footer may predate a slower report. Clear a changed account
+			// without repeating any billing request or touching a newer cached value.
+			if (owner !== generation || selected !== "all" || !ctx.model) return;
+			const model = ctx.model, value = cache.get(model.provider);
+			if (!value) return;
+			let same = false;
+			try { same = (await credential(ctx, model)).identity === value.identity; } catch { /* Missing auth invalidates the old footer too. */ }
+			if (owner === generation && !same) discard(ctx, model, value);
 		},
 	});
 	pi.on("session_start", async (_event, ctx) => { start(ctx); });

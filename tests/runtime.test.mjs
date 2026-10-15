@@ -87,11 +87,13 @@ test('/usage all is explicit and limits concurrent provider queries to two',asyn
   const f=fixture(t,models);let active=0,peak=0;
   globalThis.fetch=async url=>{active++;peak=Math.max(peak,active);await tick();active--;return String(url).includes('deepseek')?balance():String(url).includes('openrouter')?Response.json({data:{limit:null,usage:3}}):Response.json({balance:'4.00'});};
   await f.commands.get('usage').handler('all',f.ctx);
-  assert.equal(peak,2);assert.match(f.notifications.at(-1),/deepseek \$12/);assert.match(f.notifications.at(-1),/vercel-ai-gateway \$4/);
+  const reports = f.notifications.join('\n');
+  assert.equal(peak,2);assert.match(reports,/deepseek \$12/);assert.match(reports,/vercel-ai-gateway \$4/);
+  assert.equal(f.notifications.length, models.length, 'publish each report once without holding an aggregate');
   assert.equal(f.statuses.at(-1),'· deepseek $12.00');
 });
 for (const change of ['key', 'dropped auth', 'auth endpoint', 'model endpoint', 'official auth endpoint', 'official model endpoint', 'management key', 'dropped management key']) {
-  test(`/usage all revalidates a finished report after ${change} changes`, async t => {
+  test(`/usage all clears the old footer without republishing after ${change} changes`, async t => {
     const management = change.includes('management');
     const fast = management ? {provider:'openrouter',id:'x',baseUrl:'https://openrouter.ai/api/v1'} : {...deepseek};
     const slow = {provider:'vercel-ai-gateway',id:'x',baseUrl:'https://ai-gateway.vercel.sh/v1'};
@@ -115,6 +117,7 @@ for (const change of ['key', 'dropped auth', 'auth endpoint', 'model endpoint', 
     };
     const pending = f.commands.get('usage').handler('all', f.ctx);
     assert.equal(await waitFor(() => release && f.statuses.at(-1)?.includes('$99')), true);
+    const published = f.notifications.length;
     switch (change) {
       case 'key': auth = {ok:true,apiKey:'key-b'}; break;
       case 'dropped auth': auth = {ok:false}; break;
@@ -127,20 +130,69 @@ for (const change of ['key', 'dropped auth', 'auth endpoint', 'model endpoint', 
     }
     release(Response.json({balance:'4.00'}));
     await pending;
-    assert.doesNotMatch(f.notifications.at(-1), /\$99/);
-    assert.match(f.notifications.at(-1), /vercel-ai-gateway \$4/);
+    assert.doesNotMatch(f.notifications.slice(published).join('\n'), /\$99/);
+    assert.match(f.notifications.join('\n'), /vercel-ai-gateway \$4/);
     assert.equal(f.statuses.at(-1), undefined);
     assert.equal(calls, management ? 3 : 2, 'revalidation must not repeat provider requests');
   });
 }
 
+test('/usage all does not republish an earlier account while another final auth lookup waits', async t => {
+  const models = [{...deepseek}, {provider:'vercel-ai-gateway',id:'x',baseUrl:'https://ai-gateway.vercel.sh/v1'}];
+  const f = fixture(t, models), lookups = new Map();
+  let key = 'key-a', release;
+  f.ctx.modelRegistry.getApiKeyAndHeaders = async model => {
+    const count = (lookups.get(model.provider) ?? 0) + 1;
+    lookups.set(model.provider, count);
+    if (model.provider === 'vercel-ai-gateway' && count === 3) await new Promise(resolve => { release = resolve; });
+    return {ok:true,apiKey:model.provider === 'deepseek' ? key : 'other-key'};
+  };
+  globalThis.fetch = async url => String(url).includes('deepseek') ? balance('99.00') : Response.json({balance:'4.00'});
+  const pending = f.commands.get('usage').handler('all', f.ctx);
+  assert.equal(await waitFor(() => release), true);
+  await tick();
+  const published = f.notifications.length;
+  key = 'key-b'; release(); await pending;
+  assert.doesNotMatch(f.notifications.slice(published).join('\n'), /\$99/);
+  assert.match(f.notifications.join('\n'), /vercel-ai-gateway \$4/);
+  assert.equal(f.statuses.at(-1), undefined);
+});
+
+test('/usage all reads management binding after a stalled final auth lookup', async t => {
+  const models = [{provider:'openrouter',id:'x',baseUrl:'https://openrouter.ai/api/v1'}, {...deepseek}];
+  const f = fixture(t, models);
+  const names = ['PI_USAGE_REVIEW_INFERENCE', 'PI_USAGE_REVIEW_MANAGEMENT'];
+  const previous = names.map(name => process.env[name]);
+  t.after(() => names.forEach((name,index) => {
+    if (previous[index] === undefined) delete process.env[name]; else process.env[name] = previous[index];
+  }));
+  process.env[names[0]] = 'key-a'; process.env[names[1]] = 'management-a';
+  f.config({openrouterCredits:{inferenceKeyEnv:names[0],managementKeyEnv:names[1]}});
+  let count = 0, release;
+  f.ctx.modelRegistry.getApiKeyAndHeaders = async model => {
+    if (model.provider === 'openrouter' && ++count === 3) await new Promise(resolve => { release = resolve; });
+    return {ok:true,apiKey:'key-a'};
+  };
+  globalThis.fetch = async url => String(url).includes('deepseek') ? balance('4.00')
+    : String(url).endsWith('/credits') ? Response.json({data:{total_credits:100,total_usage:1}})
+    : Response.json({data:{limit:null,usage:3}});
+  const pending = f.commands.get('usage').handler('all', f.ctx);
+  assert.equal(await waitFor(() => release), true);
+  f.config({openrouterCredits:undefined});
+  release(); await pending;
+  assert.doesNotMatch(f.notifications.join('\n'), /\$99/);
+  assert.match(f.notifications.join('\n'), /deepseek \$4/);
+  assert.equal(f.statuses.at(-1), undefined);
+});
+
 test('/usage all isolates provider errors from successful reports', async t => {
   const f = fixture(t, [deepseek, {provider:'openrouter',id:'x',baseUrl:'https://openrouter.ai/api/v1'}]);
   globalThis.fetch = async url => String(url).includes('deepseek') ? balance() : new Response('SECRET', {status:503});
   await f.commands.get('usage').handler('all', f.ctx);
-  assert.match(f.notifications.at(-1), /deepseek \$12.00/);
-  assert.match(f.notifications.at(-1), /openrouter:.*503/);
-  assert.doesNotMatch(f.notifications.at(-1), /SECRET/);
+  const reports = f.notifications.join('\n');
+  assert.match(reports, /deepseek \$12.00/);
+  assert.match(reports, /openrouter:.*503/);
+  assert.doesNotMatch(reports, /SECRET/);
   assert.equal(f.statuses.at(-1), '· deepseek $12.00');
 });
 
