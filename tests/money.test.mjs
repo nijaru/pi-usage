@@ -24,7 +24,8 @@ test("provider-specific statuses stay compact and reports retain exact money", (
   const baseten = parseBaseten({ model_apis_usage: { total: "1.2345", credits_used: "0", subtotal: "1.2345" } });
   assert.equal(formatBalanceStatus(baseten), "baseten $1.23 net");
   assert.match(formatBalanceReport(baseten), /net spend: \$1\.2345/);
-  assert.equal(formatBalanceStatus(parseBaseten({})), "baseten $0.00 net");
+  assert.throws(() => parseBaseten({}), /did not include Model APIs usage/);
+  assert.equal(formatBalanceStatus(parseBaseten({ model_apis_usage: null })), "baseten no 30d usage");
   const fireworks = parseFireworksBilling({ lineItems: [{ totalCost: { currencyCode: "USD", nanos: 1 } }] });
   assert.equal(formatBalanceStatus(fireworks), "fireworks <$0.01");
   assert.match(formatBalanceReport(fireworks), /30d rated spend: \$0\.000000001/);

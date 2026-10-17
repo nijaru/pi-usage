@@ -215,7 +215,16 @@ test('transient failure marks an existing value stale rather than presenting a f
   globalThis.fetch=async()=>fail?new Response('error',{status:503}):balance();
   await f.hooks.get('session_start')({},f.ctx);await tick();fail=true;
   await f.hooks.get('agent_settled')({},f.ctx);
-  assert.equal(await waitFor(()=>(f.statuses.at(-1)??'').endsWith('12.00 · stale'),250),true);
+  assert.equal(await waitFor(()=>(f.statuses.at(-1)??'').includes('stale · deepseek $12.00'),250),true);
+});
+
+test('enabling usage at runtime starts polling without a model event',async t=>{
+  const f=fixture(t);f.config({enabled:false});let calls=0;
+  globalThis.fetch=async()=>{calls++;return balance();};
+  await f.hooks.get('session_start')({},f.ctx);assert.equal(calls,0);
+  f.config({enabled:true});
+  await f.hooks.get('agent_settled')({},f.ctx);await tick();
+  assert.equal(calls,1);
 });
 
 test('a stalled auth resolver is bounded instead of hanging the handler',async t=>{

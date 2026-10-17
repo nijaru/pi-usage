@@ -14,7 +14,8 @@ interface Credential { identity: string; token: string; accountId?: string; cred
 const supported = (provider: string) => provider === "openai-codex" || isBalanceProvider(provider);
 const status = (report: Report, stale = false) => {
 	const text = "codex" in report ? formatUsageStatus(report.codex) : formatBalanceStatus(report.balance);
-	return text && stale ? `${text} · stale` : text;
+	// A short left marker survives Pi's right-side footer truncation.
+	return text && stale ? `stale · ${text}` : text;
 };
 /** Footer values carry a leading separator; notifications and reports use `status` directly. */
 const display = (text: string) => text ? `· ${text}` : undefined;
@@ -36,7 +37,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionContext) => ResolvedUsageConfig): void {
 	let generation = 0;
 	let active = false;
-	let timer: ReturnType<typeof setInterval> | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
 	const cache = new Map<string, Cached>();
 	const requests = new Map<string, { identity: string; controller: AbortController; promise: Promise<Cached> }>();
 	const controllers = new Set<AbortController>();
@@ -45,7 +46,7 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 	function stop(ctx: ExtensionContext): void {
 		active = false;
 		generation++;
-		if (timer) clearInterval(timer);
+		if (timer) clearTimeout(timer);
 		timer = undefined;
 		for (const controller of controllers) controller.abort();
 		controllers.clear(); requests.clear(); cache.clear(); lastAttempt.clear();
@@ -80,9 +81,9 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 		return { token: resolved.token, creditsKey, config, identity: fingerprint(`${resolved.fingerprint}\0${model.baseUrl}\0${auth.baseUrl ?? model.baseUrl}\0${creditsKey ?? ""}`) };
 	}
 
-	async function query(ctx: ExtensionContext, model: PiModel, force = false): Promise<Cached> {
+	async function query(ctx: ExtensionContext, model: PiModel, force = false, preAuth?: Credential): Promise<Cached> {
 		const owner = generation;
-		const auth = await credential(ctx, model);
+		const auth = preAuth ?? await credential(ctx, model);
 		const config = auth.config;
 		if (owner !== generation) throw new DOMException("Session changed", "AbortError");
 		const previous = cache.get(model.provider);
@@ -132,8 +133,12 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 
 	async function refresh(ctx: ExtensionContext): Promise<void> {
 		const model = ctx.model, owner = generation;
-		if (!active || !ctx.hasUI || !model || !supported(model.provider)) return;
-		if (!readConfig(ctx).enabled) { stop(ctx); return; }
+		if (!ctx.hasUI || !model || !supported(model.provider)) return;
+		const config = readConfig(ctx);
+		if (!config.enabled) { if (active) stop(ctx); return; }
+		// Enabling the extension at runtime starts polling even without a
+		// session/model event; start() schedules from the current interval.
+		if (!active) { start(ctx); return; }
 		try {
 			// Back off failures between frequent tool/assistant turns, but still check account identity.
 			const auth = await credential(ctx, model);
@@ -141,10 +146,10 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 			const cached = cache.get(model.provider);
 			if (cached && cached.identity !== auth.identity) { cache.delete(model.provider); ctx.ui.setStatus(STATUS_KEY, undefined); }
 			const key = auth.identity;
-			if (Date.now() - (lastAttempt.get(key) ?? 0) < Math.min(5000, readConfig(ctx).pollIntervalMs)) return;
+			if (Date.now() - (lastAttempt.get(key) ?? 0) < Math.min(5000, config.pollIntervalMs)) return;
 			lastAttempt.set(key, Date.now());
 			if (lastAttempt.size > 32) lastAttempt.delete(lastAttempt.keys().next().value!);
-			const value = await query(ctx, model);
+			const value = await query(ctx, model, false, auth);
 			if (owner === generation && ctx.model?.provider === model.provider && ctx.model?.id === model.id) ctx.ui.setStatus(STATUS_KEY, display(status(value.report, value.stale)));
 		} catch (error) {
 			if (owner !== generation) return;
@@ -157,13 +162,24 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 			ctx.ui.setStatus(STATUS_KEY, value && same ? display(status(value.report, value.stale || !cancelled)) : cancelled ? undefined : display(`${model.provider} usage unavailable`));
 		}
 	}
+	/** Reschedule from the current config after every refresh. */
+	function schedule(ctx: ExtensionContext): void {
+		if (timer) clearTimeout(timer);
+		timer = undefined;
+		if (!active) return;
+		const config = readConfig(ctx);
+		timer = setTimeout(async () => {
+			await refresh(ctx);
+			schedule(ctx);
+		}, config.pollIntervalMs);
+		timer.unref?.();
+	}
 	function start(ctx: ExtensionContext): void {
 		stop(ctx);
 		const config = readConfig(ctx);
 		if (!config.enabled || !ctx.hasUI || !ctx.model || !supported(ctx.model.provider)) return;
 		active = true;
-		timer = setInterval(() => { void refresh(ctx); }, config.pollIntervalMs);
-		timer.unref?.();
+		schedule(ctx);
 		void refresh(ctx);
 	}
 	function choose(ctx: ExtensionContext, provider: string): PiModel | undefined {

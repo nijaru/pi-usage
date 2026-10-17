@@ -68,6 +68,42 @@ test("Z.AI does not invent five-hour duration when metadata is missing", () => {
   assert.doesNotMatch(result.status, /5h/);
 });
 
+test("Z.AI error codes are sanitized before they reach the UI", () => {
+  assert.throws(
+    () => parseZai("zai", { code: "1113\u001b[2Jwiped", data: {} }),
+    (error) => error.message.includes("1113") && !error.message.includes("\u001b"),
+  );
+});
+
+test("Z.AI reset sentinels and out-of-range values are omitted", () => {
+  const sentinel = parseZai("zai", { code: 0, data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, percentage: 20, number: 5, nextResetTime: "0" }] } });
+  assert.doesNotMatch(sentinel.lines.join("\n"), /2000|resets/);
+  const huge = parseZai("zai", { code: 0, data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, percentage: 20, number: 5, nextResetTime: 1e20 }] } });
+  assert.doesNotMatch(huge.lines.join("\n"), /resets/);
+});
+
+test("Z.AI MCP-only quota uses the report fallback instead of a bare footer", () => {
+  const result = parseZai("zai", { code: 0, data: { limits: [{ type: "TIME_LIMIT", currentValue: 2, usage: 10 }] } });
+  assert.equal(result.status, undefined);
+  assert.match(formatBalanceStatus(result), /MCP monthly: 8\/10 left/);
+});
+
+test("Fireworks account discovery follows pagination", async () => {
+  const identity = officialIdentity(model("fireworks", "https://api.fireworks.ai"), { ok: true, apiKey: "key" });
+  const urls = [];
+  await assert.rejects(
+    fetchBalance(identity, signal(), async (url) => {
+      urls.push(String(url));
+      return String(url).includes("pageToken")
+        ? Response.json({ accounts: [{ name: "accounts/two" }] })
+        : Response.json({ accounts: [{ name: "accounts/one" }], nextPageToken: "page-2" });
+    }),
+    /account selection required/,
+  );
+  assert.equal(urls.length, 2);
+  assert.match(urls[1], /pageToken=page-2/);
+});
+
 test("Baseten reports net trailing-30-day spend, not balance", () => {
   const result = parseBaseten({ model_apis_usage: { total: "12.50", credits_used: "2.25", subtotal: "10.25" } });
   assert.equal(result.kind, "spend");

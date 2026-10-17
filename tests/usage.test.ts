@@ -149,6 +149,13 @@ describe("parseCodexUsage", () => {
 		expect(usage.otherWindows?.[0]?.resetAt).toBe(resetAt);
 	});
 
+	test("ignores sentinel reset timestamps", () => {
+		const usage = parseCodexUsage(
+			usageResponse({ used_percent: 20, limit_window_seconds: 3_600, reset_at: 0 }, null),
+		);
+		expect(usage.otherWindows?.[0]?.resetAt).toBeUndefined();
+	});
+
 	test("clamps remaining percentages to the display range", () => {
 		expect(formatUsageStatus({ fiveHour: { usedPercent: -10 } })).toBe("5h 100%");
 		expect(formatUsageStatus({ weekly: { usedPercent: 110 } })).toBe("wk 0%");

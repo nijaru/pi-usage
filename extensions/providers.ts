@@ -126,10 +126,20 @@ function percent(value: unknown): number | undefined {
 	const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
 	return Number.isFinite(number) && number >= 0 && number <= 100 ? number : undefined;
 }
+const ISO_RESET = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))?$/;
+
+/** Accept positive epochs or timezone-qualified ISO timestamps, never local-time guesses. */
 function resetText(value: unknown): string | undefined {
-	if (typeof value === "number" && Number.isFinite(value) && value > 0) return new Date(value > 10_000_000_000 ? value : value * 1000).toISOString();
-	if (typeof value === "string" && Number.isFinite(Date.parse(value))) return new Date(value).toISOString();
-	return undefined;
+	let millis: number | undefined;
+	if (typeof value === "number" && Number.isFinite(value) && value > 0) millis = value > 10_000_000_000 ? value : value * 1000;
+	else if (typeof value === "string" && ISO_RESET.test(value.trim())) {
+		const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value.trim())
+			? `${value.trim()}T00:00:00Z`
+			: value.trim().replace(" ", "T");
+		millis = Date.parse(normalized);
+	}
+	if (millis === undefined || !Number.isFinite(millis) || millis < 946_684_800_000 || millis > 4_102_444_800_000) return undefined;
+	return new Date(millis).toISOString();
 }
 
 export function parseDeepSeek(payload: unknown): ProviderReport {
@@ -314,7 +324,7 @@ export function parseZai(provider: string, payload: unknown): ProviderReport {
 	if (code !== undefined && code !== 0 && code !== "0" && code !== 200 && code !== "200") {
 		if (String(code) === "1113") throw new Error("Z.AI balance or resource package unavailable");
 		if (String(code) === "1309") throw new Error("Z.AI GLM Coding Plan expired");
-		throw new Error(`Z.AI usage API failed (${String(code).slice(0,16)})`);
+		throw new Error(`Z.AI usage API failed (${cleanLabel(String(code), "unknown")})`);
 	}
 	const data = requireObject(root.data);
 	if (!Array.isArray(data.limits)) throw new Error("Z.AI returned no quota limits");
@@ -344,13 +354,16 @@ export function parseZai(provider: string, payload: unknown): ProviderReport {
 	}
 	if (!parts.length && !result.lines.length) throw new Error("Z.AI returned no displayable quota data");
 	if (typeof data.level === "string" && data.level.trim()) result.lines.push(`Plan: ${cleanLabel(data.level,"plan")}`);
-	result.status = `${provider === "zai" ? "zai" : "zai-cn"} ${parts.slice(0,2).join(" · ")}`;
+	// MCP-only responses have lines but no quota parts; leave status undefined so
+	// the report fallback shows that line instead of a bare provider name.
+	if (parts.length > 0) result.status = `${provider === "zai" ? "zai" : "zai-cn"} ${parts.slice(0,2).join(" · ")}`;
 	return result;
 }
 
 export function parseBaseten(payload: unknown): ProviderReport {
 	const root = requireObject(payload), result = report("baseten", "spend");
-	if (root.model_apis_usage == null) { result.status = "baseten $0.00 net"; result.lines.push("No Model APIs usage in the last 30 days"); return result; }
+	if (root.model_apis_usage === undefined) throw new Error("Baseten response did not include Model APIs usage");
+	if (root.model_apis_usage === null) { result.status = "baseten no 30d usage"; result.lines.push("No Model APIs usage in the last 30 days"); return result; }
 	const usage = requireObject(root.model_apis_usage);
 	for (const [label,key] of [["gross usage","total"],["credits used","credits_used"],["net subtotal","subtotal"]] as const) {
 		const value = decimal(usage[key]); if (value === undefined || Number(value) < 0) throw new Error(`Invalid Baseten ${label}`);
@@ -473,12 +486,32 @@ export async function fetchBalance(
 	}
 	if (provider === "baseten") return parseBaseten(await getJson(basetenUrl(), token, signal, fetcher));
 	if (provider === "fireworks") {
-		const accounts = parseFireworksAccounts(await getJson("https://api.fireworks.ai/v1/accounts?pageSize=200", token, signal, fetcher));
+		const accounts = await fetchFireworksAccounts(token, signal, fetcher);
 		if (accounts.length === 0) throw new Error("Fireworks returned no visible billing accounts");
 		if (accounts.length > 1) throw new Error("Fireworks account selection required; multiple billing accounts are visible");
 		return parseFireworksBilling(await getJson(fireworksBillingUrl(accounts[0]), token, signal, fetcher));
 	}
 	throw new Error("No verified reporting parser for this credential type");
+}
+
+/** Fireworks lists accounts one page at a time; page one can hide another account. */
+async function fetchFireworksAccounts(token: string, signal: AbortSignal, fetcher: Fetcher = globalThis.fetch): Promise<string[]> {
+	const ids: string[] = [];
+	let pageToken: string | undefined;
+	for (let page = 0; page < 20; page++) {
+		const url = new URL("https://api.fireworks.ai/v1/accounts");
+		url.searchParams.set("pageSize", "200");
+		if (pageToken !== undefined) url.searchParams.set("pageToken", pageToken);
+		const payload = await getJson(url.toString(), token, signal, fetcher);
+		ids.push(...parseFireworksAccounts(payload));
+		const next = requireObject(payload).nextPageToken;
+		if (next === undefined || next === null || next === "") break;
+		if (typeof next !== "string" || next.length > 512 || next === pageToken) throw new Error("Invalid Fireworks page token");
+		pageToken = next;
+		if (page === 19) throw new Error("Fireworks accounts pagination exceeded the supported bound");
+	}
+	if (new Set(ids).size !== ids.length) throw new Error("Duplicate Fireworks account across pages");
+	return ids;
 }
 
 export function formatBalanceStatus(result: ProviderReport): string {

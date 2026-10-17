@@ -60,7 +60,9 @@ function parseWindow(value: unknown): UsageWindow | undefined {
 	// reset_at is currently Unix seconds. Treat values already in the normal
 	// millisecond epoch range as milliseconds if the endpoint changes units.
 	const rawResetAt = finiteNumber(value.reset_at);
-	const resetAt = rawResetAt === undefined ? undefined : Math.abs(rawResetAt) >= 100_000_000_000 ? rawResetAt : rawResetAt * 1000;
+	const millis = rawResetAt === undefined || rawResetAt <= 0 ? undefined : Math.abs(rawResetAt) >= 100_000_000_000 ? rawResetAt : rawResetAt * 1000;
+	// Sentinel/out-of-range resets are absent, not "now".
+	const resetAt = millis !== undefined && millis >= 946_684_800_000 && millis <= 4_102_444_800_000 ? millis : undefined;
 
 	return {
 		usedPercent: Math.max(0, Math.min(100, usedPercent)),
