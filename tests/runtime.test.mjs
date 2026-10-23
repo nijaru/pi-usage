@@ -72,6 +72,53 @@ for (const event of ['session_shutdown', 'model_select']) test(`a late credentia
   assert.equal(f.statuses.some(Boolean), false);
 });
 
+test('a retired query cannot delete a newer same-account balance', async t => {
+  const f = fixture(t);
+  t.mock.timers.enable({apis:['setTimeout', 'Date'], now:Date.now()});
+  const drain = () => new Promise(resolve => setImmediate(resolve));
+  let release, lookups = 0, requests = 0;
+  f.ctx.modelRegistry.getApiKeyAndHeaders = async () => {
+    if (++lookups === 2) await new Promise(resolve => { release = resolve; });
+    return {ok:true,apiKey:'key-a'};
+  };
+  globalThis.fetch = async () => ++requests <= 2 ? balance(requests === 1 ? '12.00' : '99.00') : new Response('', {status:503});
+  await f.hooks.get('session_start')({}, f.ctx); await drain();
+  assert.equal(typeof release, 'function');
+  await f.hooks.get('model_select')({}, f.ctx); await drain();
+  assert.match(f.statuses.at(-1), /99\.00/);
+  release(); await drain();
+  t.mock.timers.tick(6000);
+  f.hooks.get('agent_settled')({}, f.ctx); await drain();
+  assert.equal(requests, 2);
+  assert.match(f.statuses.at(-1), /99\.00/);
+});
+
+test('a retired timer cannot replace the new model polling loop', async t => {
+  const f = fixture(t, [deepseek, codex]);
+  t.mock.timers.enable({apis:['setTimeout', 'Date'], now:Date.now()});
+  const drain = () => new Promise(resolve => setImmediate(resolve));
+  let release, lookups = 0;
+  const requests = [];
+  f.ctx.modelRegistry.getApiKeyAndHeaders = async model => {
+    if (model.provider === 'deepseek' && ++lookups === 3) await new Promise(resolve => { release = resolve; });
+    return {ok:true,apiKey:model.provider === 'openai-codex' ? token('key-b') : 'key-a'};
+  };
+  globalThis.fetch = async url => {
+    requests.push(String(url));
+    return String(url).includes('deepseek') ? balance() : Response.json({rate_limit:{primary_window:{used_percent:10,limit_window_seconds:18000}}});
+  };
+  await f.hooks.get('session_start')({}, f.ctx); await drain();
+  t.mock.timers.tick(60000); await drain();
+  assert.equal(typeof release, 'function');
+  const next = {...f.ctx, model:codex};
+  await f.hooks.get('model_select')({}, next); await drain();
+  const switched = requests.length;
+  release(); await drain();
+  t.mock.timers.tick(60000); await drain();
+  assert.equal(requests.length, switched + 1);
+  assert.match(requests.at(-1), /chatgpt/);
+});
+
 test('errors do not become a zero balance or leak server response bodies',async t=>{
   const f=fixture(t);globalThis.fetch=async()=>new Response('SECRET-RESPONSE',{status:403});
   await f.commands.get('usage').handler('',f.ctx);

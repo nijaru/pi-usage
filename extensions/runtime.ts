@@ -109,7 +109,9 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 				controller.signal.throwIfAborted();
 				const current = await credential(ctx, model);
 				if (owner !== generation || current.identity !== auth.identity) {
-					if (cache.get(model.provider)?.identity === auth.identity) cache.delete(model.provider);
+					// The same account may already have a fresh result in a newer
+					// session. Identity alone does not authorize stale cleanup.
+					if (owner === generation && cache.get(model.provider)?.identity === auth.identity) cache.delete(model.provider);
 					throw new DOMException("Account or session changed", "AbortError");
 				}
 				const value: Cached = { identity: auth.identity, fetchedAt: Date.now(), report: result };
@@ -167,10 +169,13 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 		if (timer) clearTimeout(timer);
 		timer = undefined;
 		if (!active) return;
-		const config = readConfig(ctx);
+		const config = readConfig(ctx), owner = generation;
 		timer = setTimeout(async () => {
+			if (owner !== generation) return;
 			await refresh(ctx);
-			schedule(ctx);
+			// A model/session replacement may have installed a new polling loop
+			// while authentication was pending. Never replace that loop with ours.
+			if (owner === generation) schedule(ctx);
 		}, config.pollIntervalMs);
 		timer.unref?.();
 	}
