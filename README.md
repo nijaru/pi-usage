@@ -45,7 +45,7 @@ Only the active provider is polled automatically. Other-provider reports are exp
 
 No authenticated provider calls are claimed by the fixture status above. Run live smoke checks with already-authorized accounts before treating a provider as live-verified.
 
-Balances, key caps, quota, allowances, and spend are not interchangeable. Currencies remain separate. A missing field, failed request, or unsupported provider is not shown as zero. Decimal strings remain exact; OpenRouter credit subtraction and provider-specific fixed-point money use integer arithmetic where needed. Old MiniMax payloads without unambiguous remaining-percentage fields are reported as unavailable rather than guessing what a usage count means.
+Balances, key caps, quota, allowances, and spend are not interchangeable. The footer names monetary kinds that are not plain balances (`credit`, `cap`, `booster`, `30d spend`, `net spend`) so spend is not read as remaining balance. Currencies remain separate. A missing field, failed request, or unsupported provider is not shown as zero. Decimal strings remain exact; OpenRouter credit subtraction and provider-specific fixed-point money use integer arithmetic where needed. Old MiniMax payloads without unambiguous remaining-percentage fields are reported as unavailable rather than guessing what a usage count means.
 
 ### Deliberately unsupported reporting surfaces
 
@@ -80,7 +80,7 @@ The Codex `usageUrl` preference remains readable, but the runtime requires the o
 
 `GET /api/v1/key` reports a **per-key cap**, not your account balance. Account credit comes from `GET /api/v1/credits`, which requires a **management key**. With no management credential, key reporting still works and explains the missing account-credit capability.
 
-The footer shows `openrouter $25.00 cap $10.00` when both account credit and a remaining key allowance are available. `cap` means the amount left, not the configured total limit. Either value can appear alone; when neither is available, the footer is hidden. `/usage` retains spending and cap details.
+The footer shows `openrouter credit $25.00 cap $10.00` when both account credit and a remaining key allowance are available. `credit` is account credit; `cap` means the amount left, not the configured total limit. Either value can appear alone; when neither is available, the footer is hidden. `/usage` retains spending and cap details.
 
 Use environment-variable names in the **global user file only**:
 

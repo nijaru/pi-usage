@@ -208,19 +208,19 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 			if (!ctx.hasUI) throw new Error("/usage requires an interactive UI");
 			const selected = args.trim() || ctx.model?.provider;
 			if (!selected || (selected !== "all" && !supported(selected))) {
-				ctx.ui.notify(`Usage is available for openai-codex, ${BALANCE_PROVIDERS.join(", ")}.`, "info");
+				ctx.ui.notify(`Usage is available for openai-codex, ${BALANCE_PROVIDERS.join(", ")}.`, "warning");
 				return;
 			}
 			const providers = selected === "all"
 				? [...new Set([ctx.model?.provider, ...ctx.modelRegistry.getAvailable().map(model => model.provider)])].filter((provider): provider is string => Boolean(provider && supported(provider)))
 				: [selected];
 			const owner = generation;
-			if (!providers.length) { ctx.ui.notify("No supported authenticated providers configured", "info"); return; }
+			if (!providers.length) { ctx.ui.notify("No supported authenticated providers configured", "warning"); return; }
 			let next = 0;
 			await Promise.all(Array.from({ length: Math.min(2, providers.length) }, async () => {
 				while (next < providers.length && owner === generation) {
 					const provider = providers[next++], model = choose(ctx, provider);
-					if (!model) { ctx.ui.notify(`${provider}: no authenticated model configured`, "info"); continue; }
+					if (!model) { ctx.ui.notify(`${provider}: no authenticated model configured`, "warning"); continue; }
 					let value: Cached | undefined;
 					try {
 						value = await query(ctx, model, true);
@@ -236,7 +236,7 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 					} catch (error) {
 						if (owner !== generation) return;
 						if (value) discard(ctx, model, value);
-						ctx.ui.notify(`${provider}: ${error instanceof Error ? error.message : "usage unavailable"}`, "info");
+						ctx.ui.notify(`${provider}: ${error instanceof Error ? error.message : "usage unavailable"}`, "error");
 					}
 				}
 			}));

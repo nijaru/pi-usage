@@ -303,7 +303,7 @@ export function parseKimi(payload: unknown): ProviderReport {
 		if (currency && /^[A-Z]{3}$/.test(currency) && left !== undefined) result.amounts.push({ label: "booster balance", currency, value: left });
 	}
 	if (!windows.length && !result.amounts.length) throw new Error("Kimi Coding returned no displayable usage data");
-	result.status = `kimi ${windows.slice(0,2).map(bucket => `${bucket.remaining.toFixed(0)}% ${shortWindow(bucket.minutes)}`).join(" · ") || result.amounts.map(a=>formatMoney(a.currency, a.value, true)).join(" · ")}`;
+	result.status = `kimi ${windows.slice(0,2).map(bucket => `${bucket.remaining.toFixed(0)}% ${shortWindow(bucket.minutes)}`).join(" · ") || result.amounts.map(compactAmount).join(" · ")}`;
 	return result;
 }
 
@@ -380,7 +380,7 @@ export function parseBaseten(payload: unknown): ProviderReport {
 		result.lines.push(`${label}: ${formatMoney("USD", value)}`);
 		if (key === "subtotal") result.amounts.push({ label: "net spend", currency: "USD", value });
 	}
-	result.status = `baseten ${formatMoney("USD", result.amounts[0].value, true)} net`;
+	result.status = `baseten net spend ${formatMoney("USD", result.amounts[0].value, true)}`;
 	return result;
 }
 
@@ -436,7 +436,9 @@ export function parseFireworksBilling(payload: unknown): ProviderReport {
 	}
 	if (!result.amounts.length) result.lines.push("No rated line items in the last 30 days");
 	result.lines.push("Rated spend may differ from the final invoice after credits or adjustments");
-	result.status = `fireworks ${result.amounts.map(a => formatMoney(a.currency, a.value, true)).join(" · ") || "no 30d spend"}`;
+	result.status = result.amounts.length
+		? `fireworks 30d spend ${result.amounts.map(a => formatMoney(a.currency, a.value, true)).join(" · ")}`
+		: "fireworks no 30d spend";
 	return result;
 }
 
@@ -524,14 +526,26 @@ async function fetchFireworksAccounts(token: string, signal: AbortSignal, fetche
 	return ids;
 }
 
+/** Name a monetary kind only when it is not the provider's plain balance. */
+function compactAmount({ currency, value, label }: Amount): string {
+	const money = formatMoney(currency, value, true);
+	switch (label) {
+		case "key cap left": return `cap ${money}`;
+		case "account credit":
+		case "credit": return `credit ${money}`;
+		case "booster balance": return `booster ${money}`;
+		case "30d rated spend": return `30d spend ${money}`;
+		case "net spend": return `net spend ${money}`;
+		default: return money;
+	}
+}
 export function formatBalanceStatus(result: ProviderReport): string {
 	if (result.provider === "openrouter") {
-		const parts = result.amounts.map(({ currency, value, label }) =>
-			`${label === "key cap left" ? "cap " : ""}${formatMoney(currency, value, true)}`);
+		const parts = result.amounts.map(compactAmount);
 		return parts.length ? `openrouter ${parts.join(" ")}` : "";
 	}
 	if (result.status) return `${result.status}${result.available === false ? " · API unavailable" : ""}`;
-	const amounts = result.amounts.map(({ currency, value, label }) => `${formatMoney(currency, value, true)}${label === "key cap left" ? " key cap left" : ""}`);
+	const amounts = result.amounts.map(compactAmount);
 	const content = amounts.join(" · ") || (result.kind === "key-limit" ? "key spend only" : result.kind === "quota" ? result.lines.join(" · ") : result.kind === "spend" ? "spend unavailable" : "balance unavailable");
 	return `${result.provider} ${content}${result.available === false ? " · API unavailable" : ""}`;
 }

@@ -16,15 +16,15 @@ const token=account=>`e30.${Buffer.from(JSON.stringify({'https://api.openai.com/
 const deepseek={provider:'deepseek',id:'flash',baseUrl:'https://api.deepseek.com'};
 const codex={provider:'openai-codex',id:'gpt',baseUrl:'https://chatgpt.com/backend-api/codex'};
 function fixture(t, models=[deepseek]) {
-  const hooks=new Map(),commands=new Map(),statuses=[],notifications=[];
+  const hooks=new Map(),commands=new Map(),statuses=[],notifications=[],notificationTypes=[];
   let key='key-a';
-  const ctx={model:models[0],hasUI:true,cwd:'/tmp',isProjectTrusted:()=>true,ui:{setStatus:(_key,value)=>statuses.push(value),notify:(value)=>notifications.push(value)},modelRegistry:{getAvailable:()=>models,getApiKeyAndHeaders:async(model)=>({ok:true,apiKey:model.provider==='openai-codex'?token(key):key})}};
+  const ctx={model:models[0],hasUI:true,cwd:'/tmp',isProjectTrusted:()=>true,ui:{setStatus:(_key,value)=>statuses.push(value),notify:(value,type)=>{notifications.push(value);notificationTypes.push(type);}},modelRegistry:{getAvailable:()=>models,getApiKeyAndHeaders:async(model)=>({ok:true,apiKey:model.provider==='openai-codex'?token(key):key})}};
   const pi={on:(key,callback)=>hooks.set(key,callback),registerCommand:(key,command)=>commands.set(key,command)};
   let config={enabled:true,pollIntervalMs:60000,requestTimeoutMs:10000,usageUrl:DEFAULT_USAGE_URL};
   registerUsage(pi,()=>config);
   const old=globalThis.fetch;
   t.after(async()=>{await hooks.get('session_shutdown')({},ctx);globalThis.fetch=old;});
-  return {ctx,hooks,commands,statuses,notifications,key:value=>{key=value;},config:value=>{config={...config,...value};}};
+  return {ctx,hooks,commands,statuses,notifications,notificationTypes,key:value=>{key=value;},config:value=>{config={...config,...value};}};
 }
 const balance=(value='12.00')=>Response.json({is_available:true,balance_infos:[{currency:'USD',total_balance:value}]});
 
@@ -151,7 +151,15 @@ test('a retired timer cannot replace the new model polling loop', async t => {
 test('errors do not become a zero balance or leak server response bodies',async t=>{
   const f=fixture(t);globalThis.fetch=async()=>new Response('SECRET-RESPONSE',{status:403});
   await f.commands.get('usage').handler('',f.ctx);
-  assert.match(f.notifications.at(-1),/403/);assert.doesNotMatch(f.notifications.at(-1),/SECRET|\$0/);
+  assert.match(f.notifications.at(-1),/403/);assert.doesNotMatch(f.notifications.at(-1),/SECRET|\$0/);assert.equal(f.notificationTypes.at(-1),'error');
+});
+test('missing models and unsupported queries warn instead of reporting success',async t=>{
+  const f=fixture(t,[]);
+  await f.commands.get('usage').handler('deepseek',f.ctx);
+  assert.match(f.notifications.at(-1),/no authenticated model configured/);
+  assert.equal(f.notificationTypes.at(-1),'warning');
+  await f.commands.get('usage').handler('nonsense',f.ctx);
+  assert.equal(f.notificationTypes.at(-1),'warning');
 });
 test('disabled/headless sessions do not poll',async t=>{
   const f=fixture(t);let calls=0;globalThis.fetch=async()=>{calls++;return balance();};
@@ -164,7 +172,7 @@ test('/usage all is explicit and limits concurrent provider queries to two',asyn
   globalThis.fetch=async url=>{active++;peak=Math.max(peak,active);await tick();active--;return String(url).includes('deepseek')?balance():String(url).includes('openrouter')?Response.json({data:{limit:null,usage:3}}):Response.json({balance:'4.00'});};
   await f.commands.get('usage').handler('all',f.ctx);
   const reports = f.notifications.join('\n');
-  assert.equal(peak,2);assert.match(reports,/deepseek \$12/);assert.match(reports,/vercel-ai-gateway \$4/);
+  assert.equal(peak,2);assert.match(reports,/deepseek \$12/);assert.match(reports,/vercel-ai-gateway credit \$4/);
   assert.equal(f.notifications.length, models.length, 'publish each report once without holding an aggregate');
   assert.equal(f.statuses.at(-1),'· deepseek $12.00');
 });
@@ -207,7 +215,7 @@ for (const change of ['key', 'dropped auth', 'auth endpoint', 'model endpoint', 
     release(Response.json({balance:'4.00'}));
     await pending;
     assert.doesNotMatch(f.notifications.slice(published).join('\n'), /\$99/);
-    assert.match(f.notifications.join('\n'), /vercel-ai-gateway \$4/);
+    assert.match(f.notifications.join('\n'), /vercel-ai-gateway credit \$4/);
     assert.equal(f.statuses.at(-1), undefined);
     assert.equal(calls, management ? 3 : 2, 'revalidation must not repeat provider requests');
   });
@@ -230,7 +238,7 @@ test('/usage all does not republish an earlier account while another final auth 
   const published = f.notifications.length;
   key = 'key-b'; release(); await pending;
   assert.doesNotMatch(f.notifications.slice(published).join('\n'), /\$99/);
-  assert.match(f.notifications.join('\n'), /vercel-ai-gateway \$4/);
+  assert.match(f.notifications.join('\n'), /vercel-ai-gateway credit \$4/);
   assert.equal(f.statuses.at(-1), undefined);
 });
 

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formatMoney } from "../extensions/money.ts";
-import { formatBalanceReport, formatBalanceStatus, parseBaseten, parseFireworksBilling, parseKimi } from "../extensions/providers.ts";
+import { formatBalanceReport, formatBalanceStatus, parseBaseten, parseFireworksBilling, parseKimi, parseVercel } from "../extensions/providers.ts";
 
 test("money uses distinct symbols and falls back to the currency code", () => {
   for (const [currency, expected] of [["USD", "$0.77"], ["EUR", "€0.77"], ["GBP", "£0.77"], ["CNY", "CN¥0.77"], ["CAD", "CA$0.77"], ["XYZ", "XYZ 0.77"]]) {
@@ -22,14 +22,29 @@ test("compact money rounds exactly without hiding tiny nonzero amounts", () => {
 
 test("provider-specific statuses stay compact and reports retain exact money", () => {
   const baseten = parseBaseten({ model_apis_usage: { total: "1.2345", credits_used: "0", subtotal: "1.2345" } });
-  assert.equal(formatBalanceStatus(baseten), "baseten $1.23 net");
+  assert.equal(formatBalanceStatus(baseten), "baseten net spend $1.23");
   assert.match(formatBalanceReport(baseten), /net spend: \$1\.2345/);
   assert.throws(() => parseBaseten({}), /did not include Model APIs usage/);
   assert.equal(formatBalanceStatus(parseBaseten({ model_apis_usage: null })), "baseten no 30d usage");
   const fireworks = parseFireworksBilling({ lineItems: [{ totalCost: { currencyCode: "USD", nanos: 1 } }] });
-  assert.equal(formatBalanceStatus(fireworks), "fireworks <$0.01");
+  assert.equal(formatBalanceStatus(fireworks), "fireworks 30d spend <$0.01");
   assert.match(formatBalanceReport(fireworks), /30d rated spend: \$0\.000000001/);
   const kimi = parseKimi({ boosterWallet: { balance: { type: "BOOSTER", amountLeft: "123456789" }, monthlyUsed: { currency: "USD" } } });
-  assert.equal(formatBalanceStatus(kimi), "kimi $1.23");
+  assert.equal(formatBalanceStatus(kimi), "kimi booster $1.23");
   assert.match(formatBalanceReport(kimi), /booster balance: \$1\.23456789/);
+});
+
+test("footer monetary labels distinguish credits and spend from balances", () => {
+  const fireworks = parseFireworksBilling({ lineItems: [
+    { totalCost: { currencyCode: "USD", units: "1", nanos: 250000000 } },
+    { totalCost: { currencyCode: "EUR", units: "2", nanos: 500000000 } },
+  ] });
+  assert.equal(formatBalanceStatus(fireworks), "fireworks 30d spend $1.25 · €2.50");
+  assert.doesNotMatch(formatBalanceStatus(fireworks), /balance/i);
+  assert.match(formatBalanceReport(fireworks), /30d rated spend: \$1\.25/);
+  assert.match(formatBalanceReport(fireworks), /30d rated spend: €2\.5/);
+
+  const vercel = parseVercel({ balance: "4.5", total_used: "100" });
+  assert.equal(formatBalanceStatus(vercel), "vercel-ai-gateway credit $4.50");
+  assert.match(formatBalanceReport(vercel), /credit: \$4\.5/);
 });
