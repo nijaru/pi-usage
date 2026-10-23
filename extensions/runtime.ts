@@ -3,7 +3,7 @@ import type { ResolvedUsageConfig } from "./config.ts";
 import { STATUS_KEY } from "./constants.ts";
 import { accountIdFromAccessToken, fetchCodexUsage, formatUsageStatus, type CodexUsage } from "./usage.ts";
 import {
-	BALANCE_PROVIDERS, fetchBalance, fingerprint, formatBalanceReport, formatBalanceStatus,
+	BALANCE_PROVIDERS, bearerToken, fetchBalance, fingerprint, formatBalanceReport, formatBalanceStatus,
 	isBalanceProvider, officialIdentity, resolveCreditsKey, type ProviderReport,
 } from "./providers.ts";
 
@@ -69,8 +69,7 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 				const url = new URL(value);
 				if (url.origin !== "https://chatgpt.com" || url.username || url.password) throw new Error("Codex usage requires the official ChatGPT origin");
 			}
-			const authorization = Object.entries(auth.headers ?? {}).find(([key]) => key.toLowerCase() === "authorization");
-			const token = authorization ? (typeof authorization[1] === "string" ? /^Bearer\s+(.+)$/i.exec(authorization[1])?.[1] : undefined) : auth.apiKey;
+			const token = bearerToken(auth);
 			const accountHeader = Object.entries(auth.headers ?? {}).find(([key]) => key.toLowerCase() === "chatgpt-account-id")?.[1];
 			const accountId = typeof accountHeader === "string" ? accountHeader : token ? accountIdFromAccessToken(token) : undefined;
 			if (!token || !accountId) throw new Error("Codex account unavailable");

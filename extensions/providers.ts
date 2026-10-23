@@ -83,19 +83,27 @@ function effectiveOrigin(model: ProviderModel, auth: ResolvedAuth): string {
 	if (!origins || modelUrl.username || modelUrl.password || authUrl.username || authUrl.password || !origins.includes(modelUrl.origin) || !origins.includes(authUrl.origin)) {
 		throw new Error("Usage requires this provider's official endpoint; proxy credentials are not forwarded");
 	}
-	if (modelUrl.origin !== authUrl.origin && !(model.provider === "baseten" && origins.includes(modelUrl.origin) && origins.includes(authUrl.origin))) {
+	// Baseten serves inference and billing from two different official origins;
+	// every other provider must resolve to one origin. Both origins are already
+	// verified against this provider's official list above.
+	if (modelUrl.origin !== authUrl.origin && model.provider !== "baseten") {
 		throw new Error("Usage auth origin does not match the selected provider origin");
 	}
 	return authUrl.origin;
 }
 
+/** The bearer credential Pi resolved; an explicit Authorization header never falls back to an API key. */
+export function bearerToken(auth: ResolvedAuth): string | undefined {
+	const authorization = Object.entries(auth.headers ?? {}).find(([key]) => key.toLowerCase() === "authorization");
+	return authorization
+		? (typeof authorization[1] === "string" ? /^Bearer\s+(.+)$/i.exec(authorization[1])?.[1] : undefined)
+		: auth.apiKey;
+}
+
 export function officialIdentity(model: ProviderModel, auth: ResolvedAuth): Identity {
 	if (!auth.ok) throw new Error("Provider authentication unavailable");
 	const origin = effectiveOrigin(model, auth);
-	const authorization = Object.entries(auth.headers ?? {}).find(([key]) => key.toLowerCase() === "authorization");
-	const token = authorization
-		? (typeof authorization[1] === "string" ? /^Bearer\s+(.+)$/i.exec(authorization[1])?.[1] : undefined)
-		: auth.apiKey;
+	const token = bearerToken(auth);
 	if (!token || /[\r\n]/.test(token)) throw new Error("Provider bearer credential unavailable");
 	return { provider: model.provider, model, token, origin, fingerprint: fingerprint(`${model.provider}\0${origin}\0${token}`) };
 }
@@ -310,8 +318,9 @@ export function parseOpenCode(payload: unknown): ProviderReport {
 		const used = percent(state.percent);
 		if (used === undefined) continue;
 		const left = Math.max(0, 100 - used);
+		const reset = resetText(state.resetsAt);
 		parts.push(`${left.toFixed(0)}% ${label}`);
-		result.lines.push(`${label}: ${left.toFixed(0)}% left${resetText(state.resetsAt) ? ` · resets ${resetText(state.resetsAt)}` : ""}`);
+		result.lines.push(`${label}: ${left.toFixed(0)}% left${reset ? ` · resets ${reset}` : ""}`);
 	}
 	if (!parts.length) throw new Error("OpenCode Go returned no displayable usage data");
 	result.status = `opencode ${parts.slice(0,2).join(" · ")}`;
@@ -341,7 +350,8 @@ export function parseZai(provider: string, payload: unknown): ProviderReport {
 		if (unit === 3) {
 			const used = percent(raw.percentage); if (used === undefined) continue;
 			const hours = Number(raw.number), label = Number.isFinite(hours) && hours > 0 ? `${hours}h` : "rolling";
-			const left = Math.max(0, 100-used); parts.push(`${left.toFixed(0)}% ${label}`); result.lines.push(`${label}: ${left.toFixed(0)}% left${resetText(raw.nextResetTime) ? ` · resets ${resetText(raw.nextResetTime)}` : ""}`);
+			const reset = resetText(raw.nextResetTime);
+			const left = Math.max(0, 100-used); parts.push(`${left.toFixed(0)}% ${label}`); result.lines.push(`${label}: ${left.toFixed(0)}% left${reset ? ` · resets ${reset}` : ""}`);
 		} else if (unit === 6) {
 			const usedCount = Number(raw.currentValue), limitCount = Number(raw.usage);
 			if (Number.isFinite(usedCount) && Number.isFinite(limitCount) && limitCount > 0) {
