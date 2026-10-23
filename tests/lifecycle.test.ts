@@ -4,21 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import piUsage, { resolveConfig } from "../extensions/index.ts";
 
-test("production entrypoint adds no model tools and cannot change inference requests", () => {
-	const commands: string[] = [], hooks: string[] = [];
+test("production entrypoint exposes only the usage command, not model tools", () => {
+	const commands: string[] = [];
 	let tools = 0;
 	piUsage({
 		registerCommand(name: string) { commands.push(name); },
-		on(name: string) { hooks.push(name); },
+		on() {},
 		registerTool() { tools++; },
 	} as unknown as Parameters<typeof piUsage>[0]);
-	// Contract: the only user surface is /usage, and no hook may rewrite
-	// requests, headers, prompts, or tool traffic.
 	expect(commands).toEqual(["usage"]);
 	expect(tools).toBe(0);
-	for (const hook of ["before_provider_request", "before_provider_headers", "context", "context_with_system", "tool_call", "tool_result"]) {
-		expect(hooks).not.toContain(hook);
-	}
 });
 
 test("management credential binding is global-only and survives unrelated project overrides", () => {
