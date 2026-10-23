@@ -1,6 +1,6 @@
 {
   "name": "@nijaru/pi-usage",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "type": "module",
   "description": "Compact provider quota and balance reporting for Pi.",
   "keywords": [
