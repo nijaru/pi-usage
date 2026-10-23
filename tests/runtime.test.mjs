@@ -52,7 +52,7 @@ for (const scenario of [
   });
   const sent = [];
   globalThis.fetch = async (_url, init) => {
-    sent.push(init.headers['ChatGPT-Account-Id']);
+    sent.push(new Headers(init.headers).get('ChatGPT-Account-Id'));
     return Response.json({ rate_limit: { primary_window: { used_percent: 18, limit_window_seconds: 18000 } } });
   };
   await f.commands.get('usage').handler('', f.ctx);
