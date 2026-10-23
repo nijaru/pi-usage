@@ -39,6 +39,31 @@ test('successful Codex display remains byte-for-byte unchanged',async t=>{
   await f.commands.get('usage').handler('',f.ctx);
   assert.equal(f.statuses.at(-1),'· 5h 82% · wk 64%');assert.equal(f.notifications.at(-1),'Codex usage: 5h 82% · wk 64%');
 });
+for (const scenario of [
+  { name: 'an explicitly deleted header never revives from the JWT', headers: { 'chatgpt-account-id': null }, dispatched: null },
+  { name: 'an explicit header override wins case-insensitively over the JWT', headers: { 'ChatGPT-Account-Id': 'acct-direct' }, dispatched: 'acct-direct' },
+  { name: 'an absent header falls back to the JWT account id', headers: undefined, dispatched: 'acct-jwt' },
+]) test(`codex account id: ${scenario.name}`, async t => {
+  const f = fixture(t, [codex]);
+  f.ctx.modelRegistry.getApiKeyAndHeaders = async () => ({
+    ok: true,
+    apiKey: token('acct-jwt'),
+    ...(scenario.headers ? { headers: scenario.headers } : {}),
+  });
+  const sent = [];
+  globalThis.fetch = async (_url, init) => {
+    sent.push(init.headers['ChatGPT-Account-Id']);
+    return Response.json({ rate_limit: { primary_window: { used_percent: 18, limit_window_seconds: 18000 } } });
+  };
+  await f.commands.get('usage').handler('', f.ctx);
+  if (scenario.dispatched === null) {
+    assert.equal(sent.length, 0, 'a deleted account must not dispatch a usage request');
+    assert.match(f.notifications.at(-1), /Codex account unavailable/);
+  } else {
+    assert.deepEqual(sent, [scenario.dispatched]);
+  }
+});
+
 test('account swap cannot publish an old in-flight balance',async t=>{
   const f=fixture(t);let release;globalThis.fetch=()=>new Promise(resolve=>{release=resolve;});
   await f.hooks.get('session_start')({},f.ctx);await tick();f.key('key-b');release(balance('99.00'));await tick();await tick();

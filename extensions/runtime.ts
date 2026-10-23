@@ -70,8 +70,13 @@ export function registerUsage(pi: ExtensionAPI, readConfig: (ctx: ExtensionConte
 				if (url.origin !== "https://chatgpt.com" || url.username || url.password) throw new Error("Codex usage requires the official ChatGPT origin");
 			}
 			const token = bearerToken(auth);
-			const accountHeader = Object.entries(auth.headers ?? {}).find(([key]) => key.toLowerCase() === "chatgpt-account-id")?.[1];
-			const accountId = typeof accountHeader === "string" ? accountHeader : token ? accountIdFromAccessToken(token) : undefined;
+			// Keep an explicit header distinct from an absent one: a valid string
+			// wins, an explicit null/invalid value never revives from the JWT, and
+			// only a genuinely absent header falls back to the token claims.
+			const accountEntry = Object.entries(auth.headers ?? {}).find(([key]) => key.toLowerCase() === "chatgpt-account-id");
+			const accountId = accountEntry
+				? typeof accountEntry[1] === "string" ? accountEntry[1] : undefined
+				: token ? accountIdFromAccessToken(token) : undefined;
 			if (!token || !accountId) throw new Error("Codex account unavailable");
 			return { token, accountId, config, identity: fingerprint(`${model.provider}\0${model.baseUrl}\0${auth.baseUrl ?? model.baseUrl}\0${config.usageUrl}\0${token}\0${accountId}`) };
 		}
