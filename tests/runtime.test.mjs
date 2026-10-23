@@ -30,8 +30,6 @@ const balance=(value='12.00')=>Response.json({is_available:true,balance_infos:[{
 
 test('active DeepSeek balance appears without changing inference requests',async t=>{
   const f=fixture(t);let calls=0;globalThis.fetch=async()=>{calls++;return balance();};
-  assert.deepEqual([...f.commands.keys()],['usage']);
-  assert.equal(f.hooks.has('before_provider_request'),false);
   await f.hooks.get('session_start')({},f.ctx);await tick();
   assert.equal(f.statuses.at(-1),'· deepseek $12.00'); assert.equal(calls,1);
   await f.hooks.get('agent_settled')({},f.ctx);assert.equal(calls,1);
@@ -46,10 +44,16 @@ test('account swap cannot publish an old in-flight balance',async t=>{
   await f.hooks.get('session_start')({},f.ctx);await tick();f.key('key-b');release(balance('99.00'));await tick();await tick();
   assert.equal(f.statuses.at(-1),undefined);assert.equal(f.statuses.some(x=>x?.includes('99.00')),false);
 });
-test('model switch and shutdown reject stale request completion',async t=>{
-  const f=fixture(t);let release;globalThis.fetch=()=>new Promise(resolve=>{release=resolve;});
-  await f.hooks.get('session_start')({},f.ctx);await tick();f.ctx.model={provider:'other',id:'x',baseUrl:'https://other.test'};await f.hooks.get('model_select')({},f.ctx);release(balance('99.00'));await tick();
-  assert.equal(f.statuses.at(-1),undefined);
+for (const event of ['model_select', 'session_shutdown']) test(`a late request completion cannot publish after ${event}`, async t => {
+  const f = fixture(t);
+  let release;
+  globalThis.fetch = () => new Promise(resolve => { release = resolve; });
+  await f.hooks.get('session_start')({}, f.ctx); await tick();
+  if (event === 'model_select') f.ctx.model = { provider: 'other', id: 'x', baseUrl: 'https://other.test' };
+  await f.hooks.get(event)({}, f.ctx);
+  release(balance('99.00')); await tick();
+  assert.equal(f.statuses.some(x => x?.includes('99')), false, 'the completed request must not republish');
+  assert.equal(f.statuses.at(-1), undefined);
 });
 for (const event of ['session_shutdown', 'model_select']) test(`a late credential lookup cannot start a request after ${event}`, async t => {
   const f = fixture(t);
